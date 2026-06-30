@@ -1,0 +1,15 @@
+[Unit]
+Description=nwall NFQUEUE DPI worker
+After=network-online.target nwall.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env /usr/local/bin/nwall dpi run
+Restart=on-failure
+RestartSec=2s
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

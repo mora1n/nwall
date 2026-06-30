@@ -1,0 +1,11 @@
+[Unit]
+Description=nwall nftables rules restore
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env /usr/local/bin/nwall protect apply --confirm
+
+[Install]
+WantedBy=multi-user.target

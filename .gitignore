@@ -1,0 +1,9 @@
+dist/
+.codex/
+.claude/
+nwall
+nwall-geobuild
+**/AGENTS.md
+**/CLAUDE.md
+**/.env
+*.test
