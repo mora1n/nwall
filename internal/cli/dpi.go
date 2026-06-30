@@ -1,29 +1,15 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 
 	"github.com/mora1n/nwall/internal/conf"
-	"github.com/mora1n/nwall/internal/dpi"
 )
 
 func runDPI(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall dpi http|tls|socks on|off | skip-port add|del|list <port> | run")
-	}
-	if args[0] == "run" {
-		cfg, err := loadConfig()
-		if err != nil {
-			return err
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return dpi.Run(ctx, cfg.Protect)
+		return fmt.Errorf("用法: nwall dpi http|tls|socks on|off | skip-port add|del|list <port>")
 	}
 	cfg, err := loadConfig()
 	if err != nil {

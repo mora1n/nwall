@@ -1,28 +1,30 @@
 # nwall
 
-`nwall` 是一个基于 nftables 的单二进制防护工具，用于本机白名单流量保护、临时租约放行、出站限制、HTTP/TLS/SOCKS 封锁和下行伪装。
+`nwall` 是一个单二进制的本机防护工具：TUI 配置，SQLite 保存状态，systemd 运行守护进程。
 
 ## 特性
 
-- 单个 `nwall` 二进制；执行 `nwall` 默认打开配置界面
-- 配置和运行状态都在 `/var/lib/nwall/nwall.db`
-- 地区白名单按省份/城市选择
-- 入站白名单、出站白名单、端口覆盖策略
-- TCP 租约：默认放行访问来源 IPv4 所在 C 段，可按请求改成单 IP
-- 下行伪装：按网卡流量缺口自动拉取随机下行流量
+- 执行 `nwall` 默认打开 TUI；不用编辑配置文件
+- 配置、运行态、回滚快照和 nonce 保存在 `/var/lib/nwall/nwall.db`
+- 入站白名单支持省份、城市、自定义 CIDR、单端口覆盖
+- TCP 租约默认放行来源 IPv4 的 `/24`，可用 `mask=32` 改为单 IP
+- 下行伪装支持服务端发流、客户端按 RX/TX 缺口自动拉取
+- systemd 只需要一个 `nwall.service`
 
 ## 安装
 
-安装最新版：
+在线安装最新版：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mora1n/nwall/main/scripts/install.sh | bash
+systemctl enable --now nwall.service
 ```
 
 安装指定版本：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mora1n/nwall/main/scripts/install.sh | bash -s -- --version v0.1.0
+systemctl enable --now nwall.service
 ```
 
 手动下载 Release：
@@ -35,9 +37,20 @@ sha256sum -c "nwall-linux-amd64-${VERSION}.tar.gz.sha256"
 tar -xzf "nwall-linux-amd64-${VERSION}.tar.gz"
 cd "nwall-linux-amd64-${VERSION}"
 ./install.sh
+systemctl enable --now nwall.service
 ```
 
-安装不会覆盖已有 `/var/lib/nwall/nwall.db`。
+安装不会覆盖已有 `/var/lib/nwall/nwall.db`。保留旧 DB 重新安装时，nwall 会从同一路径加载配置。
+
+## 工作原理
+
+nwall 只管理本机规则。你通过 TUI 或 CLI 写入 SQLite DB，再执行 `nwall protect apply --confirm` 应用防护规则；未确认的 apply 会自动回滚，避免远程机器被错误规则锁死。
+
+长期任务都由 `nwall daemon` 托管：协议封锁、TCP 租约服务端、公网 token 触发器、下行伪装服务端和自动拉取。`nwall status` 通过 `/run/nwall/nwall.sock` 查看守护进程状态；`nwall reload` 让守护进程重新读取 DB 配置。
+
+TCP 租约只走 TCP 消息：请求里携带来源 IP、时间戳、nonce 和签名。IPv4 默认放行来源 IP 所在 `/24`，访问触发器时可用 `?mask=32` 放行单 IP，也可用 `?mask=24` 明确放行 C 段。
+
+下行伪装的 seed 文件默认保存为 `/var/lib/nwall/downmask/seed.bin`；DB 只保存 `seed_path`，不会保存 seed 内容。
 
 ## 快速开始
 
@@ -45,196 +58,172 @@ cd "nwall-linux-amd64-${VERSION}"
 nwall
 ```
 
-## 工作原理
-
-`nwall` 运行在被保护的机器上，只管理本机访问规则。通过 TUI 或 CLI 修改配置，再执行 `nwall protect apply --confirm` 让规则生效；如果没有及时确认，nwall 会自动回滚，避免远程机器被错误规则锁死。
-
-入站白名单决定哪些来源能访问本机服务；TCP 租约用于临时放行访问者，IPv4 默认放行来源 IP 所在 C 段，也可以用 `mask=32` 只放行单个 IP。公网入口可以运行 `lease trigger`，把 `/<token>` 访问转换成发往安装机的 TCP 租约消息；`<token>` 没有默认值，必须由用户显式配置。
-
-下行伪装分成两端：服务端运行 `downmask serve`，按共享令牌发送随机流量；客户端运行 `downmask reconcile`，读取本机网卡 RX/TX 计数，按每日随机比例计算下行缺口，并从配置的服务端目标自动拉取。
-
-## 常用命令
-
-查看帮助：
+常用守护进程命令：
 
 ```bash
-nwall -h
+nwall status
+nwall reload
+systemctl status nwall.service
 ```
 
-入站白名单：
+## 入站白名单
+
+推荐用 TUI 选择省份/城市：
+
+```bash
+nwall
+```
+
+CLI 示例：
 
 ```bash
 nwall protect config set --clear-open-ports --open-port 2222 --open-port 19082 --guard-all true
+nwall ingress enable
 nwall ingress cn select 广东省 四川省
 nwall ingress city add 440100 440300 510100
 nwall ingress custom add 198.51.100.0/24
 nwall ingress port 443 city add 440100 440300
 nwall protect apply --confirm
+nwall reload
 ```
 
-上面的城市 code 分别示例广州、深圳、成都。端口覆盖策略只影响指定端口，例如只允许广州和深圳访问 `443`。
+说明：
 
-出站白名单：
+- `440100 440300 510100` 示例为广州、深圳、成都
+- 选中省份后，同省城市会被省份 IP 段覆盖
+- `ingress port 443 ...` 只影响指定端口
+
+## 出站白名单
 
 ```bash
 nwall egress enable
 nwall egress custom add 198.51.100.0/24
 nwall protect apply --confirm
+nwall reload
 ```
 
-HTTP/TLS/SOCKS 封锁：
+## 协议封锁
 
 ```bash
 nwall dpi http on
 nwall dpi tls on
 nwall dpi socks on
-systemctl enable --now nwall-dpi.service
+nwall dpi skip-port add 2222
 nwall protect apply --confirm
+nwall reload
 ```
 
-## 租约
+## TCP 租约
 
-生成并写入租约 key：
+生成共享 key：
 
 ```bash
 LEASE_KEY="$(nwall lease keygen)"
-nwall lease config set --lease-key "$LEASE_KEY" --listen 192.0.2.10:19082 --trusted-relay 198.51.100.0/24
 ```
 
-新增租约路由：
+安装机配置 TCP 租约服务端：
 
 ```bash
+nwall lease server set --lease-key "$LEASE_KEY" --listen 192.0.2.10:19082 --trusted-relay 198.51.100.0/24
 nwall lease route add default --idle-ttl 3d --allow 203.0.113.0/24
-systemctl enable --now nwall-lease.service
+nwall reload
 ```
 
-`--allow 203.0.113.0/24` 表示只有这个 C 段内的来源能申请 `default` 租约。服务端实际放行的是请求内 `source-ip` 所在 C 段，除非请求带 `mask=24..32`。
-
-配置公网触发器：
+中转机配置公网 token 触发器：
 
 ```bash
-nwall lease trigger-config set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32 --trusted-proxy ::1/128
+nwall lease trigger set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32 --trusted-proxy ::1/128
 nwall lease trigger-route add <token> --label default --target 192.0.2.10:19082 --idle-ttl 3d --ipv4-prefix-len 24
-systemctl enable --now nwall-lease-trigger.service
+nwall reload
 ```
 
-`<token>` 是 URL 中的访问令牌，例如 `https://example.com/<token>`，请换成自己生成的随机字符串。反代到 `127.0.0.1:19081` 后，trigger 只信任来自 `--trusted-proxy` 的 `X-Real-IP` / `X-Forwarded-For`，再把真实来源 IP 写入 TCP 租约消息。访问 `?mask=32` 会只放行单 IP；访问 `?mask=24` 会放行 C 段。
+`<token>` 是 URL 路径令牌，没有默认值，必须自己生成并填写。访问 `https://example.com/<token>` 会按默认 `/24` 放行来源 C 段；访问 `https://example.com/<token>?mask=32` 只放行单 IP。
 
-发送 TCP 租约：
-
-```bash
-nwall lease send --target 192.0.2.10:19082 --route default --source-ip 203.0.113.9 --lease-key "$LEASE_KEY"
-```
-
-显式放行 C 段：
+手动发送租约：
 
 ```bash
 nwall lease send --target 192.0.2.10:19082 --route default --source-ip 203.0.113.9 --mask 24 --lease-key "$LEASE_KEY"
-```
-
-只放行单 IP：
-
-```bash
 nwall lease send --target 192.0.2.10:19082 --route default --source-ip 203.0.113.9 --mask 32 --lease-key "$LEASE_KEY"
 ```
 
-TCP 租约消息自带时间戳、nonce 和签名。
-
 ## 下行伪装
+
+生成下行伪装共享密钥和 seed：
+
+```bash
+DOWNMASK_KEY="$(openssl rand -hex 16)"
+nwall downmask seed --size 268435456
+```
 
 服务端：
 
 ```bash
-DOWNMASK_TOKEN="$(openssl rand -hex 16)"
-nwall downmask config set --tcp-addr 0.0.0.0:15301 --token "$DOWNMASK_TOKEN"
-nwall downmask seed --size 268435456
-systemctl enable --now nwall-downmask.service
+nwall downmask server set --tcp 0.0.0.0:15301 --udp 0.0.0.0:15301 --token "$DOWNMASK_KEY"
+nwall reload
 ```
 
-同时启用 TCP 和 UDP：
+客户端自动拉取：
 
 ```bash
-nwall downmask config set --tcp-addr 0.0.0.0:15301 --udp-addr 0.0.0.0:15301 --token "$DOWNMASK_TOKEN"
-systemctl restart nwall-downmask.service
+nwall downmask client set --iface eth0 --min-ratio 1.5 --max-ratio 2.0 --min-deficit-bytes 20971520 --max-bytes-per-run 524288000 --max-jitter 60 --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token "$DOWNMASK_KEY" --speed-limit 4M --timeout 300 --speed-jitter-percent 12 --bytes-jitter-percent 18
+nwall downmask target add 192.0.2.20 --weight 1
+nwall reload
 ```
 
-客户端拉取 1 GiB 下行流量：
+多目标：
 
 ```bash
-nwall downmask pull --protocol tcp --remote-host 203.0.113.10 --remote-port 15301 --token "$DOWNMASK_TOKEN" --wanted-bytes 1073741824
+nwall downmask target add 192.0.2.20 --weight 2
+nwall downmask target add 198.51.100.20 --weight 1 --tcp-enabled true --udp-enabled false
+nwall downmask target list
 ```
 
-自动拉取：
+手动拉取和状态：
 
 ```bash
-nwall downmask policy set --pull-mode ab --iface eth0 --min-ratio 1.5 --max-ratio 2.0 --min-deficit-bytes 20971520 --max-bytes-per-run 524288000 --max-jitter 60
-nwall downmask ab-pull set --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token "$DOWNMASK_TOKEN" --speed-limit 4M --timeout 300 --speed-jitter-percent 12 --bytes-jitter-percent 18
-nwall downmask ab-pull targets add 192.0.2.20 --weight 1
-systemctl enable --now nwall-downmask-reconcile.timer
-```
-
-多服务端目标：
-
-```bash
-nwall downmask ab-pull targets add 192.0.2.20 --weight 2
-nwall downmask ab-pull targets add 198.51.100.20 --weight 1 --tcp-enabled true --udp-enabled false
-nwall downmask ab-pull targets list
-```
-
-查看状态和手动执行：
-
-```bash
+nwall downmask pull --protocol tcp --remote-host 192.0.2.20 --remote-port 15301 --token "$DOWNMASK_KEY" --wanted-bytes 1073741824
+nwall downmask run
 nwall downmask status
-nwall downmask reconcile
 ```
 
-`DOWNMASK_TOKEN` 是服务端和客户端一致的下行伪装共享令牌。它只用于下行伪装鉴权，不是公网触发器 URL 中的 `<token>`，也不是加密密钥。`policy` 控制何时拉取，`ab-pull` 控制从哪些服务端拉取，`reconcile` 执行一次缺口计算和拉取。
+`DOWNMASK_KEY` 只用于下行伪装服务端和客户端鉴权。它不是公网触发器 URL 的 `<token>`。
 
 ## 更新
 
 ```bash
 nwall update
-```
-
-指定版本：
-
-```bash
 nwall update --version v0.1.0
 ```
 
-更新流程：解析 latest 或指定版本，下载 Release 与 sha256，校验，备份当前二进制和 systemd unit 到临时目录，原子替换，重启已启用服务，执行健康检查。任一步失败都会自动回滚；成功后临时备份会随临时目录清理。
+更新流程：
+
+1. 解析 `latest` 或指定版本
+2. 下载 `nwall-linux-amd64-${VERSION}.tar.gz` 和 `.sha256`
+3. 校验 sha256
+4. 备份当前二进制和 systemd unit 到临时目录
+5. 原子替换二进制和 unit
+6. 重启 `nwall.service`
+7. 健康检查失败则自动回滚；成功后临时备份自动清理
 
 ## 卸载
 
-交互式卸载：
-
 ```bash
 nwall uninstall
-```
-
-保留配置 DB：
-
-```bash
 nwall uninstall --keep-config
-```
-
-删除配置 DB：
-
-```bash
 nwall uninstall --purge-config
 ```
 
-卸载会停止 systemd 服务、删除活动规则、删除二进制和 unit。未指定 `--keep-config` 或 `--purge-config` 时，会询问是否删除 `/var/lib/nwall/nwall.db`。保留 DB 后重新安装，`nwall` 会从同一路径重新加载配置和运行状态。
+卸载会停止服务、删除 nwall 规则、删除二进制和 systemd unit。
 
 ## 运行依赖
 
 | 依赖 / 能力 | 用途 |
 | --- | --- |
-| `nftables` | 应用、删除、检查防护规则 |
-| `iproute2` (`ip`) | 出站白名单需要读取本机路由信息 |
-| `root` 或 `CAP_NET_ADMIN` | 应用 nftables 规则、运行协议封锁 |
-| `systemd` | 使用随包提供的服务 |
-| `openssl` | 示例中生成 token；非 nwall 运行必需 |
+| `nftables` | 应用、删除、检查本机规则 |
+| `iproute2` (`ip`) | 出站白名单读取路由信息 |
+| `root` 或 `CAP_NET_ADMIN` | 应用规则和运行协议封锁 |
+| `systemd` | 运行 `nwall.service` |
+| `openssl` | 示例中生成随机 key；不是 nwall 运行必需 |
 
 ## 构建依赖
 
@@ -248,9 +237,9 @@ nwall uninstall --purge-config
 
 | 包 | 用途 |
 | --- | --- |
-| `modernc.org/sqlite` | 单文件 SQLite DB |
+| `modernc.org/sqlite` | SQLite DB |
 | `github.com/charmbracelet/bubbletea` / `lipgloss` | TUI |
-| `github.com/florianl/go-nfqueue/v2` | 协议封锁数据包队列 |
+| `github.com/florianl/go-nfqueue/v2` | 协议封锁队列 |
 | `github.com/oschwald/maxminddb-golang/v2` | 构建地理数据资产 |
 
 ## 产物
@@ -259,7 +248,7 @@ nwall uninstall --purge-config
 
 | 路径 | 用途 |
 | --- | --- |
-| `dist/nwall` | 本地构建出的二进制 |
+| `dist/nwall-linux-amd64-${VERSION}/nwall` | Release 二进制 |
 | `dist/nwall-linux-amd64-${VERSION}.tar.gz` | GitHub Release 压缩包 |
 | `dist/nwall-linux-amd64-${VERSION}.tar.gz.sha256` | Release 校验文件 |
 
@@ -268,14 +257,10 @@ nwall uninstall --purge-config
 | 路径 / unit | 用途 |
 | --- | --- |
 | `/usr/local/bin/nwall` | 主程序 |
-| `/var/lib/nwall/nwall.db` | 配置、回滚快照、nonce、下行伪装种子和状态 |
-| `nwall.service` | 开机恢复防护规则 |
-| `nwall-dpi.service` | 协议封锁进程 |
-| `nwall-lease.service` | TCP 租约 agent |
-| `nwall-lease-trigger.service` | 公网 token 触发器 |
-| `nwall-downmask.service` | 下行伪装服务 |
-| `nwall-downmask-reconcile.service` | 执行一次下行伪装自动拉取 |
-| `nwall-downmask-reconcile.timer` | 定时触发下行伪装自动拉取 |
+| `/var/lib/nwall/nwall.db` | 配置、运行态、回滚快照、nonce |
+| `/var/lib/nwall/downmask/seed.bin` | 下行伪装 seed 文件 |
+| `/run/nwall/nwall.sock` | 守护进程本地控制 socket |
+| `nwall.service` | 单守护进程 systemd unit |
 
 ## 发布打包
 
@@ -298,8 +283,7 @@ tar 包内包含：
 nwall
 install.sh
 uninstall.sh
-systemd/*.service
-systemd/*.timer
+systemd/nwall.service
 README.md
 ```
 
@@ -309,13 +293,9 @@ README.md
 go test ./...
 go vet ./...
 go build ./...
+bash -n scripts/install.sh scripts/uninstall.sh scripts/package.sh
+systemd-analyze verify systemd/*.service
 VERSION=v0.1.0 scripts/package.sh
 (cd dist && sha256sum -c nwall-linux-amd64-v0.1.0.tar.gz.sha256)
 tar -tzf dist/nwall-linux-amd64-v0.1.0.tar.gz
 ```
-
-## 注意事项
-
-- `nwall` 的放行规则不能覆盖其他防火墙管理器已经做出的拒绝规则。
-- 启用 HTTP/TLS/SOCKS 封锁后，需要保持 `nwall-dpi.service` 运行。
-- 修改配置后，除服务自身监听参数外，防护规则需要执行 `nwall protect apply --confirm` 才会生效。

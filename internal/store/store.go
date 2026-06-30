@@ -24,6 +24,8 @@ import (
 const (
 	// DefaultPath is the default persistent SQLite database path.
 	DefaultPath = "/var/lib/nwall/nwall.db"
+	// DefaultDownmaskSeedPath is the default external downmask seed file.
+	DefaultDownmaskSeedPath = "/var/lib/nwall/downmask/seed.bin"
 
 	SeedChunkSize     = 1024 * 1024
 	DefaultSeedSize   = 1024 * 1024 * 1024
@@ -151,6 +153,7 @@ func (db *DB) init(ctx context.Context) error {
 			tcp_addr TEXT NOT NULL,
 			udp_addr TEXT NOT NULL,
 			token TEXT NOT NULL,
+			seed_path TEXT NOT NULL,
 			max_rate INTEGER NOT NULL,
 			udp_payload_bytes INTEGER NOT NULL
 		)`,
@@ -257,6 +260,9 @@ func (db *DB) init(ctx context.Context) error {
 	if err := db.migrateLeaseTCPOnly(ctx); err != nil {
 		return err
 	}
+	if err := db.migrateDownmaskExternalSeed(ctx); err != nil {
+		return err
+	}
 	return db.ensureDefaults(ctx)
 }
 
@@ -265,6 +271,11 @@ func (db *DB) migrateLeaseTCPOnly(ctx context.Context) error {
 		return err
 	}
 	return db.ensureColumn(ctx, "lease_routes", "idle_ttl", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (db *DB) migrateDownmaskExternalSeed(ctx context.Context) error {
+	spec := "TEXT NOT NULL DEFAULT '" + DefaultDownmaskSeedPath + "'"
+	return db.ensureColumn(ctx, "downmask_config", "seed_path", spec)
 }
 
 func (db *DB) ensureColumn(ctx context.Context, table, column, spec string) error {
@@ -316,7 +327,7 @@ func (db *DB) ensureDefaults(ctx context.Context) error {
 		cfg.LeaseTrigger.ListenHost, cfg.LeaseTrigger.ListenPort); err != nil {
 		return err
 	}
-	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_config(id, tcp_addr, udp_addr, token, max_rate, udp_payload_bytes) VALUES(1, '', '', '', 0, 1200)`); err != nil {
+	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_config(id, tcp_addr, udp_addr, token, seed_path, max_rate, udp_payload_bytes) VALUES(1, '', '', '', ?, 0, 1200)`, DefaultDownmaskSeedPath); err != nil {
 		return err
 	}
 	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_policy(id, pull_mode, iface, min_ratio, max_ratio, time_window_start, time_window_end, max_jitter_seconds, min_deficit_bytes, max_bytes_per_run)
@@ -871,6 +882,7 @@ type DownmaskConfig struct {
 	TCPAddr         string
 	UDPAddr         string
 	Token           string
+	SeedPath        string
 	MaxRate         uint64
 	UDPPayloadBytes int
 }
@@ -879,9 +891,12 @@ type DownmaskConfig struct {
 func (db *DB) LoadDownmaskConfig() (DownmaskConfig, error) {
 	var cfg DownmaskConfig
 	var maxRate int64
-	if err := db.sql.QueryRow(`SELECT tcp_addr, udp_addr, token, max_rate, udp_payload_bytes FROM downmask_config WHERE id=1`).
-		Scan(&cfg.TCPAddr, &cfg.UDPAddr, &cfg.Token, &maxRate, &cfg.UDPPayloadBytes); err != nil {
+	if err := db.sql.QueryRow(`SELECT tcp_addr, udp_addr, token, seed_path, max_rate, udp_payload_bytes FROM downmask_config WHERE id=1`).
+		Scan(&cfg.TCPAddr, &cfg.UDPAddr, &cfg.Token, &cfg.SeedPath, &maxRate, &cfg.UDPPayloadBytes); err != nil {
 		return DownmaskConfig{}, err
+	}
+	if strings.TrimSpace(cfg.SeedPath) == "" {
+		cfg.SeedPath = DefaultDownmaskSeedPath
 	}
 	cfg.MaxRate = uint64(maxRate)
 	return cfg, nil
@@ -889,8 +904,11 @@ func (db *DB) LoadDownmaskConfig() (DownmaskConfig, error) {
 
 // SaveDownmaskConfig stores downmask server configuration.
 func (db *DB) SaveDownmaskConfig(cfg DownmaskConfig) error {
-	_, err := db.sql.Exec(`UPDATE downmask_config SET tcp_addr=?, udp_addr=?, token=?, max_rate=?, udp_payload_bytes=? WHERE id=1`,
-		cfg.TCPAddr, cfg.UDPAddr, cfg.Token, int64(cfg.MaxRate), cfg.UDPPayloadBytes)
+	if strings.TrimSpace(cfg.SeedPath) == "" {
+		cfg.SeedPath = DefaultDownmaskSeedPath
+	}
+	_, err := db.sql.Exec(`UPDATE downmask_config SET tcp_addr=?, udp_addr=?, token=?, seed_path=?, max_rate=?, udp_payload_bytes=? WHERE id=1`,
+		cfg.TCPAddr, cfg.UDPAddr, cfg.Token, cfg.SeedPath, int64(cfg.MaxRate), cfg.UDPPayloadBytes)
 	return err
 }
 

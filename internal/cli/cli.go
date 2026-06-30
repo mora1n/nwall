@@ -25,6 +25,12 @@ func Run(args []string) error {
 	switch args[0] {
 	case "tui":
 		return runTUICommand(args[1:])
+	case "daemon":
+		return runDaemon(args[1:])
+	case "status":
+		return runDaemonStatus(args[1:])
+	case "reload":
+		return runDaemonReload(args[1:])
 	case "protect":
 		return runProtect(args[1:])
 	case "ingress":
@@ -274,43 +280,42 @@ func printUsage(w *os.File) {
 
 用法:
   nwall                                                # 打开 TUI
-  nwall tui
-  nwall protect enable|disable|status|render
-  nwall protect config set --clear-open-ports --open-port 2222 --open-port 19082 --guard-all true
-  nwall protect apply --confirm
-  nwall ingress enable|disable|status
-  nwall ingress cn off|all|list|select <省份...>
-  nwall ingress city add 440100 440300 510100             # 多个城市；推荐用 TUI 按省/市选择
-  nwall ingress custom add|del|list <CIDR>
-  nwall ingress port <port> cn|city|status|clear ...
-  nwall egress enable|disable|status
-  nwall egress cn off|all|list|select <省份...>
-  nwall egress custom add|del|list <CIDR>
-  nwall dpi http|tls|socks on|off
-  nwall dpi skip-port add|del|list <port>
-  nwall lease keygen
-  nwall lease config set --lease-key "$(nwall lease keygen)" --listen 192.0.2.10:19082 --trusted-relay 198.51.100.0/24
-  nwall lease route add <label> --idle-ttl 3d --allow 203.0.113.0/24
-  nwall lease agent
-  nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 24
-  nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 32 # 单 IP
-  nwall lease trigger-config set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32
-  nwall lease trigger-route add <token> --label <label> --target 192.0.2.10:19082 --idle-ttl 3d
-  nwall lease trigger                                  # GET /<token>?mask=24 触发 TCP 租约
-  nwall downmask config set --tcp-addr 0.0.0.0:15301 --udp-addr 0.0.0.0:15301 --token <downmask-token>
-  nwall downmask seed --size 268435456
-  nwall downmask serve                                  # 服务端发送下行伪装流量
-  nwall downmask policy set --pull-mode ab --iface eth0 --min-ratio 1.5 --max-ratio 2
-  nwall downmask ab-pull set --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token <downmask-token>
-  nwall downmask ab-pull targets add 192.0.2.20 --weight 1
-  nwall downmask reconcile                              # 按 RX/TX 缺口拉取
-  nwall downmask status
-  nwall geo export|refresh ...
-  nwall update [--version vX.Y.Z]
-  nwall uninstall [--keep-config|--purge-config]
-  nwall version
+  nwall tui                                            # 显式打开 TUI
+  nwall daemon                                         # 启动本机 daemon，systemd 使用
+  nwall status                                         # 查看 daemon 与组件状态
+  nwall reload                                         # 重新加载 DB 配置并重启 daemon 组件
+  nwall protect enable|disable|status|render           # 开关/查看/渲染防护规则
+  nwall protect config set --clear-open-ports --open-port 2222 --open-port 19082 --guard-all true # 配置公开端口
+  nwall protect apply --confirm                        # 立即应用并确认规则
+  nwall ingress enable|disable|status                  # 开关/查看入站白名单
+  nwall ingress cn off|all|list|select <省份...>       # 配置全局入站中国省份白名单
+  nwall ingress city add 440100 440300 510100          # 添加多个城市白名单；推荐用 TUI 按省/市选择
+  nwall ingress custom add|del|list <CIDR>             # 管理自定义入站 CIDR
+  nwall ingress port <port> cn|city|status|clear ...   # 管理单端口入站覆盖策略
+  nwall egress enable|disable|status                   # 开关/查看出站白名单
+  nwall egress cn off|all|list|select <省份...>        # 配置出站中国省份白名单
+  nwall egress custom add|del|list <CIDR>              # 管理自定义出站 CIDR
+  nwall dpi http|tls|socks on|off                      # 开关协议封锁
+  nwall dpi skip-port add|del|list <port>              # 管理协议封锁跳过端口
+  nwall lease keygen                                   # 生成 TCP 租约共享 key
+  nwall lease server set --lease-key "$(nwall lease keygen)" --listen 192.0.2.10:19082 --trusted-relay 198.51.100.0/24 # 配置 TCP 租约服务端
+  nwall lease route add <label> --idle-ttl 3d --allow 203.0.113.0/24 # 添加租约路由，IPv4 默认放行来源 /24
+  nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 24 # 手动发送 /24 租约
+  nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 32 # 手动发送单 IP 租约
+  nwall lease trigger set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32 # 配置公网 token 触发器
+  nwall lease trigger-route add <token> --label <label> --target 192.0.2.10:19082 --idle-ttl 3d # 添加 token 到租约路由
+  nwall downmask server set --tcp 0.0.0.0:15301 --udp 0.0.0.0:15301 --token <downmask-key> # 配置下行伪装服务端
+  nwall downmask seed --size 268435456                 # 生成外部 seed 文件，DB 只保存路径
+  nwall downmask client set --iface eth0 --min-ratio 1.5 --max-ratio 2 --remote-port 15301 --token <downmask-key> # 配置自动拉取
+  nwall downmask target add 192.0.2.20 --weight 1      # 添加下行伪装服务端目标
+  nwall downmask run                                   # 立即执行一次下行伪装缺口拉取
+  nwall downmask status                                # 查看下行伪装策略与运行状态
+  nwall geo export|refresh ...                         # 导出或刷新地理数据
+  nwall update [--version vX.Y.Z]                      # 在线更新并自动回滚失败版本
+  nwall uninstall [--keep-config|--purge-config]       # 卸载程序，可选择保留/删除 DB
+  nwall version                                        # 输出版本
 
 说明:
-  <token> 是公网触发器 URL 令牌；<downmask-token> 是下行伪装共享令牌，二者互不通用。
-  配置和运行状态保存在 /var/lib/nwall/nwall.db；执行 nwall protect apply --confirm 后才会应用规则。`)
+  <token> 是公网触发器 URL 令牌；<downmask-key> 是下行伪装共享密钥，二者互不通用。
+  配置和运行状态保存在 /var/lib/nwall/nwall.db；daemon 通过 /run/nwall/nwall.sock 管理长期组件。`)
 }

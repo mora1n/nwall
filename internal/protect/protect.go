@@ -86,6 +86,18 @@ func ingressNeedsGeo(cfg conf.Ingress) bool {
 // Apply 渲染并应用规则。confirm=true 直接生效（开机恢复/无人值守）；
 // confirm=false 时启动 detached 倒计时，超时未确认自动回滚，防止锁死。
 func Apply(cfg conf.Config, confirm bool, timeoutSec int) error {
+	return applyWithStorePath(cfg, confirm, timeoutSec, storePath())
+}
+
+// ApplyWithDBPath renders and applies rules while storing runtime state in dbPath.
+func ApplyWithDBPath(cfg conf.Config, confirm bool, timeoutSec int, dbPath string) error {
+	if dbPath == "" {
+		dbPath = storePath()
+	}
+	return applyWithStorePath(cfg, confirm, timeoutSec, dbPath)
+}
+
+func applyWithStorePath(cfg conf.Config, confirm bool, timeoutSec int, dbPath string) error {
 	if !nft.Available() {
 		return nft.ErrNftMissing
 	}
@@ -102,7 +114,7 @@ func Apply(cfg conf.Config, confirm bool, timeoutSec int) error {
 	if err != nil {
 		return fmt.Errorf("抓取回滚快照失败: %w", err)
 	}
-	db, err := store.Open(storePath())
+	db, err := store.Open(dbPath)
 	if err != nil {
 		return err
 	}
@@ -114,7 +126,7 @@ func Apply(cfg conf.Config, confirm bool, timeoutSec int) error {
 		return fmt.Errorf("应用规则失败: %w", err)
 	}
 	if confirm {
-		clearConfirmSentinel()
+		clearConfirmSentinelAt(dbPath)
 		return nil
 	}
 	if timeoutSec <= 0 {
@@ -197,7 +209,11 @@ func confirmed() bool {
 }
 
 func clearConfirmSentinel() {
-	db, err := store.Open(storePath())
+	clearConfirmSentinelAt(storePath())
+}
+
+func clearConfirmSentinelAt(path string) {
+	db, err := store.Open(path)
 	if err != nil {
 		return
 	}

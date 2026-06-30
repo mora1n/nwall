@@ -67,20 +67,20 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err := Run([]string{"egress", "custom", "add", "198.51.100.0/24"}); err != nil {
 		t.Fatalf("egress custom add: %v", err)
 	}
-	if err := Run([]string{"lease", "config", "set", "--lease-key", "secret", "--listen", "127.0.0.1:18090", "--trusted-relay", "198.51.100.0/24"}); err != nil {
-		t.Fatalf("lease config set: %v", err)
+	if err := Run([]string{"lease", "server", "set", "--lease-key", "secret", "--listen", "127.0.0.1:18090", "--trusted-relay", "198.51.100.0/24"}); err != nil {
+		t.Fatalf("lease server set: %v", err)
 	}
 	if err := Run([]string{"lease", "route", "add", "office", "--idle-ttl", "5m", "--allow", "203.0.113.0/24"}); err != nil {
 		t.Fatalf("lease route add: %v", err)
 	}
-	if err := Run([]string{"lease", "trigger-config", "set", "--listen", "127.0.0.1:19081", "--trusted-proxy", "127.0.0.1/32", "--trusted-proxy", "::1/128"}); err != nil {
-		t.Fatalf("lease trigger-config set: %v", err)
+	if err := Run([]string{"lease", "trigger", "set", "--listen", "127.0.0.1:19081", "--trusted-proxy", "127.0.0.1/32", "--trusted-proxy", "::1/128"}); err != nil {
+		t.Fatalf("lease trigger set: %v", err)
 	}
 	if err := Run([]string{"lease", "trigger-route", "add", "test-token", "--label", "office", "--target", "198.51.100.7:19082", "--idle-ttl", "3d"}); err != nil {
 		t.Fatalf("lease trigger-route add: %v", err)
 	}
-	if err := Run([]string{"downmask", "config", "set", "--tcp-addr", "127.0.0.1:15301", "--token", "mask-token", "--max-rate", "1024"}); err != nil {
-		t.Fatalf("downmask config set: %v", err)
+	if err := Run([]string{"downmask", "server", "set", "--tcp", "127.0.0.1:15301", "--token", "mask-token", "--max-rate", "1024"}); err != nil {
+		t.Fatalf("downmask server set: %v", err)
 	}
 	if err := Run([]string{"dpi", "http", "on"}); err != nil {
 		t.Fatalf("dpi http on: %v", err)
@@ -210,9 +210,9 @@ func TestHelpIncludesCommonExamples(t *testing.T) {
 		"--allow 203.0.113.0/24",
 		"--mask 24",
 		"nwall lease trigger-route add <token>",
-		"GET /<token>?mask=24",
-		"<downmask-token> 是下行伪装共享令牌",
-		"nwall protect apply --confirm 后才会应用规则",
+		"公网 token 触发器",
+		"<downmask-key> 是下行伪装共享密钥",
+		"daemon 通过 /run/nwall/nwall.sock 管理长期组件",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("help output missing %q:\n%s", want, got)
@@ -228,7 +228,7 @@ func TestUninstallDryRun(t *testing.T) {
 		t.Fatalf("uninstall dry-run: %v", err)
 	}
 	got := stdout()
-	for _, want := range []string{"DRY-RUN: nwall protect disable", "DRY-RUN: rm -f", "保留配置 DB"} {
+	for _, want := range []string{"DRY-RUN: nwall protect disable", "DRY-RUN: rm -f", "保留配置 DB", "保留状态目录"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, got)
 		}

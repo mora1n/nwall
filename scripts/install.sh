@@ -132,11 +132,29 @@ install_from_dir() {
       [[ -e "$unit" ]] || continue
       run install -m 0644 "$unit" "$SYSTEMD_DIR/$(basename "$unit")"
     done
-    for unit in "$unit_dir"/*.timer; do
-      [[ -e "$unit" ]] || continue
-      run install -m 0644 "$unit" "$SYSTEMD_DIR/$(basename "$unit")"
-    done
   fi
+  remove_legacy_units
+}
+
+remove_legacy_units() {
+  local units=(
+    nwall-dpi.service
+    nwall-lease.service
+    nwall-lease-trigger.service
+    nwall-downmask.service
+    nwall-downmask-reconcile.service
+    nwall-downmask-reconcile.timer
+  )
+  if command -v systemctl >/dev/null 2>&1; then
+    if [[ "$DRY_RUN" == 1 ]]; then
+      run systemctl disable --now "${units[@]}"
+    else
+      systemctl disable --now "${units[@]}" >/dev/null 2>&1 || true
+    fi
+  fi
+  for unit in "${units[@]}"; do
+    run rm -f "$SYSTEMD_DIR/$unit"
+  done
 }
 
 main() {

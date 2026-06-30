@@ -2,6 +2,7 @@ package mask
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -72,6 +72,7 @@ func TestHeaderAndSeed(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				dir := t.TempDir()
+				t.Setenv("NWALL_DB", filepath.Join(dir, "nwall.db"))
 				path := filepath.Join(dir, "seed.bin")
 				if err := runSeed([]string{"--path", path, "--size", tc.sizeArg}); err != nil {
 					t.Fatalf("runSeed: %v", err)
@@ -89,6 +90,26 @@ func TestHeaderAndSeed(t *testing.T) {
 						t.Fatalf("seed file is all zeros")
 					}
 				}
+				db, err := store.Open(filepath.Join(dir, "nwall.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				rows, err := db.SQL().Query(`SELECT COUNT(*) FROM downmask_seed_chunks`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				if !rows.Next() {
+					t.Fatal("missing seed chunk count")
+				}
+				var chunks int
+				if err := rows.Scan(&chunks); err != nil {
+					t.Fatal(err)
+				}
+				if chunks != 0 {
+					t.Fatalf("runSeed must not write DB seed chunks, got %d", chunks)
+				}
 			})
 		}
 	})
@@ -99,8 +120,8 @@ func TestHelpExplainsToken(t *testing.T) {
 	printUsage(&buf)
 	got := buf.String()
 	for _, want := range []string{
-		"--token <downmask-token>",
-		"<downmask-token> 是服务端和客户端一致的下行伪装共享令牌",
+		"--token <downmask-key>",
+		"<downmask-key> 是下行伪装共享密钥",
 		"openssl rand -hex 16",
 	} {
 		if !strings.Contains(got, want) {
@@ -269,19 +290,19 @@ func TestRunServePayloadValidation(t *testing.T) {
 	})
 
 	t.Run("accepts_valid_payload", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() {
-			done <- runServe([]string{
-				"--udp-addr", "127.0.0.1:0",
-				"--token", "test-token",
-				"--udp-payload-bytes", strconv.Itoa(udpDefaultPayload),
-			})
+			done <- runServeContext(ctx, serveOptions{
+				UDPAddr:    "127.0.0.1:0",
+				Token:      "test-token",
+				SeedFile:   writeTestSeedFile(t, t.TempDir()),
+				UDPPayload: udpDefaultPayload,
+			}, nil)
 		}()
 
 		time.Sleep(150 * time.Millisecond)
-		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-			t.Fatalf("send SIGTERM: %v", err)
-		}
+		cancel()
 
 		select {
 		case err := <-done:
@@ -745,6 +766,15 @@ func newTestSeed(size int) []byte {
 		seed[i] = byte(i)
 	}
 	return seed
+}
+
+func writeTestSeedFile(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "seed.bin")
+	if err := os.WriteFile(path, newTestSeed(4096), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	return path
 }
 
 type hookConfig struct {

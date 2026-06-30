@@ -123,6 +123,29 @@ func TestDownmaskSeedChunks(t *testing.T) {
 	}
 }
 
+func TestDownmaskConfigStoresExternalSeedPath(t *testing.T) {
+	db := openTestDB(t)
+	cfg, err := db.LoadDownmaskConfig()
+	if err != nil {
+		t.Fatalf("LoadDownmaskConfig: %v", err)
+	}
+	if cfg.SeedPath != DefaultDownmaskSeedPath {
+		t.Fatalf("default seed_path = %q, want %q", cfg.SeedPath, DefaultDownmaskSeedPath)
+	}
+	cfg.TCPAddr = "127.0.0.1:15301"
+	cfg.SeedPath = filepath.Join(t.TempDir(), "seed.bin")
+	if err := db.SaveDownmaskConfig(cfg); err != nil {
+		t.Fatalf("SaveDownmaskConfig: %v", err)
+	}
+	got, err := db.LoadDownmaskConfig()
+	if err != nil {
+		t.Fatalf("LoadDownmaskConfig: %v", err)
+	}
+	if got.SeedPath != cfg.SeedPath || got.TCPAddr != cfg.TCPAddr {
+		t.Fatalf("downmask config mismatch: %+v", got)
+	}
+}
+
 func TestDownmaskDynamicTablesRoundTrip(t *testing.T) {
 	db := openTestDB(t)
 	policy := DownmaskPolicy{

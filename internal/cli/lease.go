@@ -6,11 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mora1n/nwall/internal/conf"
@@ -19,23 +16,22 @@ import (
 
 func runLease(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall lease agent|send|route|config|trigger|trigger-config|trigger-route|keygen ...")
+		return fmt.Errorf("用法: nwall lease server|route|trigger|trigger-route|send|keygen ...")
 	}
 	switch args[0] {
-	case "agent":
-		return leaseAgent(args[1:])
+	case "server":
+		return leaseConfig(args[1:])
 	case "send":
 		return leaseSend(args[1:])
 	case "trigger":
-		return leaseTrigger(args[1:])
-	case "trigger-config":
-		return leaseTriggerConfig(args[1:])
+		if len(args) > 1 && (args[1] == "set" || args[1] == "show") {
+			return leaseTriggerConfig(args[1:])
+		}
+		return fmt.Errorf("用法: nwall lease trigger show|set ...")
 	case "trigger-route":
 		return leaseTriggerRoute(args[1:])
 	case "route":
 		return leaseRoute(args[1:])
-	case "config":
-		return leaseConfig(args[1:])
 	case "keygen":
 		key, err := lease.Keygen()
 		if err != nil {
@@ -62,13 +58,13 @@ func leaseConfig(args []string) error {
 		return nil
 	}
 	if args[0] != "set" {
-		return fmt.Errorf("用法: nwall lease config show|set ...")
+		return fmt.Errorf("用法: nwall lease server show|set ...")
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("lease config set", flag.ContinueOnError)
+	fs := flag.NewFlagSet("lease server set", flag.ContinueOnError)
 	listen := fs.String("listen", "", "监听地址 HOST:PORT")
 	leaseKey := fs.String("lease-key", "", "TCP 租约共享 key，可用 nwall lease keygen 生成")
 	idleTTL := fs.String("idle-ttl", "", "默认租约时长，如 10m")
@@ -101,47 +97,6 @@ func leaseConfig(args []string) error {
 	}
 	cfg.Lease.TrustedRelayCIDRs = append(cfg.Lease.TrustedRelayCIDRs, []string(trustedRelay)...)
 	return saveConfig(cfg, "已更新 lease 配置")
-}
-
-func leaseAgent(args []string) error {
-	fs := flag.NewFlagSet("lease agent", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	db, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	agent, err := lease.NewAgentWithStore(cfg, db)
-	if err != nil {
-		return err
-	}
-	return lease.RunAgentServer(ctx, cfg, agent)
-}
-
-func leaseTrigger(args []string) error {
-	fs := flag.NewFlagSet("lease trigger", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	trigger, err := lease.NewTrigger(cfg)
-	if err != nil {
-		return err
-	}
-	return lease.RunTriggerServer(ctx, cfg, trigger)
 }
 
 func leaseSend(args []string) error {
@@ -195,13 +150,13 @@ func leaseTriggerConfig(args []string) error {
 		return nil
 	}
 	if args[0] != "set" {
-		return fmt.Errorf("用法: nwall lease trigger-config show|set ...")
+		return fmt.Errorf("用法: nwall lease trigger show|set ...")
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("lease trigger-config set", flag.ContinueOnError)
+	fs := flag.NewFlagSet("lease trigger set", flag.ContinueOnError)
 	listen := fs.String("listen", "", "监听地址 HOST:PORT")
 	var trustedProxy multiFlag
 	fs.Var(&trustedProxy, "trusted-proxy", "可信反代 CIDR，可重复")

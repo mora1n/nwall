@@ -1,11 +1,19 @@
 [Unit]
-Description=nwall nftables rules restore
+Description=nwall daemon
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=/usr/bin/env /usr/local/bin/nwall protect apply --confirm
+Type=simple
+ExecStart=/usr/bin/env /usr/local/bin/nwall daemon
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=nwall
+RuntimeDirectoryMode=0750
+StateDirectory=nwall
+StateDirectoryMode=0700
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target

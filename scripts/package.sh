@@ -28,7 +28,6 @@ CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="-s -w -
 install -m 0755 "$ROOT_DIR/scripts/install.sh" "$PKG_DIR/install.sh"
 install -m 0755 "$ROOT_DIR/scripts/uninstall.sh" "$PKG_DIR/uninstall.sh"
 install -m 0644 "$ROOT_DIR"/systemd/*.service "$PKG_DIR/systemd/"
-install -m 0644 "$ROOT_DIR"/systemd/*.timer "$PKG_DIR/systemd/"
 install -m 0644 "$ROOT_DIR/README.md" "$PKG_DIR/README.md"
 
 (cd "$OUT_DIR" && tar -czf "$PKG_NAME.tar.gz" "$PKG_NAME")

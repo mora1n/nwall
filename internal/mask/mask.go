@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -239,17 +240,15 @@ func Run(args []string) error {
 	switch args[0] {
 	case "pull":
 		return runPull(args[1:])
-	case "serve":
-		return runServe(args[1:])
+	case "server":
+		return runServerConfig(args[1:])
+	case "client":
+		return runClientConfig(args[1:])
+	case "target":
+		return runTarget(args[1:])
 	case "seed":
 		return runSeed(args[1:])
-	case "config":
-		return runConfig(args[1:])
-	case "policy":
-		return runPolicy(args[1:])
-	case "ab-pull":
-		return runABPullConfig(args[1:])
-	case "reconcile":
+	case "run":
 		return runReconcile(args[1:])
 	case "status":
 		return runStatus(args[1:])
@@ -268,22 +267,61 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `nwall downmask - 下行伪装
 
 用法:
-  nwall downmask pull   --protocol tcp|udp --remote-host HOST(IP) --remote-port PORT --token <downmask-token> --wanted-bytes N [--speed-limit BPS] [--timeout SEC]
-  nwall downmask config set --tcp-addr HOST:PORT --token <downmask-token>
-  nwall downmask policy set --pull-mode off|ab --iface IFACE --min-ratio N --max-ratio N
-  nwall downmask ab-pull set --protocol tcp|udp --protocol-mode single|parallel --remote-port PORT --token <downmask-token>
-  nwall downmask ab-pull targets add <host> [--port PORT] [--token <downmask-token>] [--local-ip IP] [--weight N] [--tcp-enabled true|false] [--udp-enabled true|false]
-  nwall downmask reconcile
-  nwall downmask status
-  nwall downmask serve  [--tcp-addr HOST:PORT] [--udp-addr HOST:PORT] [--token <downmask-token>] [--seed-file PATH] [--max-rate BPS] [--udp-payload-bytes N(17-65507)] [--status-file PATH]
-  nwall downmask seed   [--path PATH] [--size BYTES]
-  nwall downmask version
+  nwall downmask server show                                                                 # 查看服务端监听、密钥和 seed 路径
+  nwall downmask server set --tcp HOST:PORT --udp HOST:PORT --token <downmask-key> --seed PATH # 配置服务端
+  nwall downmask client show                                                                 # 查看自动拉取策略
+  nwall downmask client set --iface IFACE --min-ratio N --max-ratio N --remote-port PORT --token <downmask-key> # 配置自动拉取
+  nwall downmask target add <host> [--port PORT] [--weight N] [--token <downmask-key>]       # 添加服务端目标
+  nwall downmask target del <host>                                                           # 删除服务端目标
+  nwall downmask target list                                                                 # 列出服务端目标
+  nwall downmask seed [--path PATH] [--size BYTES]                                           # 生成外部 seed 文件
+  nwall downmask pull --protocol tcp|udp --remote-host HOST --remote-port PORT --token <downmask-key> --wanted-bytes N # 手动拉取
+  nwall downmask run                                                                         # 立即执行一次自动拉取
+  nwall downmask status                                                                      # 查看策略和运行状态
 
 说明:
-  reconcile 根据网卡 RX/TX 差额自动拉取下行伪装流量，当前支持 AB 模式。
-  policy 控制何时拉取；ab-pull 控制从哪些服务端目标拉取；status 查看策略、日状态和服务端状态。
-  <downmask-token> 是服务端和客户端一致的下行伪装共享令牌，可用 openssl rand -hex 16 生成；它不是公网触发器 URL 的 <token>。
-  serve 不带参数时从 /var/lib/nwall/nwall.db 读取服务端配置和种子。`)
+  client set 开启自动拉取；target 配置可拉取的服务端；run 立即执行一次缺口计算和拉取。
+  <downmask-key> 是下行伪装共享密钥，可用 openssl rand -hex 16 生成；它不是公网触发器 URL 的 <token>。
+  seed 默认写入 /var/lib/nwall/downmask/seed.bin，DB 只保存 seed_path，不保存 seed 内容。`)
+}
+
+func runServerConfig(args []string) error {
+	if len(args) == 0 || args[0] == "show" {
+		return runConfig([]string{"show"})
+	}
+	if args[0] != "set" {
+		return fmt.Errorf("用法: nwall downmask server show|set ...")
+	}
+	return runConfig(append([]string{"set"}, args[1:]...))
+}
+
+func runClientConfig(args []string) error {
+	if len(args) == 0 || args[0] == "show" {
+		if err := runPolicy([]string{"show"}); err != nil {
+			return err
+		}
+		return printABPullConfig()
+	}
+	if args[0] != "set" {
+		return fmt.Errorf("用法: nwall downmask client show|set ...")
+	}
+	return runClientSet(args[1:])
+}
+
+func runTarget(args []string) error {
+	if len(args) == 0 {
+		args = []string{"list"}
+	}
+	switch args[0] {
+	case "list":
+		return runABPullTargets([]string{"list"})
+	case "add":
+		return runABPullTargets(args)
+	case "del", "delete":
+		return runABPullTargets(append([]string{"delete"}, args[1:]...))
+	default:
+		return fmt.Errorf("用法: nwall downmask target add|del|list ...")
+	}
 }
 
 func runConfig(args []string) error {
@@ -300,17 +338,20 @@ func runConfig(args []string) error {
 		fmt.Printf("tcp_addr: %s\n", cfg.TCPAddr)
 		fmt.Printf("udp_addr: %s\n", cfg.UDPAddr)
 		fmt.Printf("token: %s\n", secretState(cfg.Token))
+		fmt.Printf("seed_path: %s\n", cfg.SeedPath)
 		fmt.Printf("max_rate: %d\n", cfg.MaxRate)
 		fmt.Printf("udp_payload_bytes: %d\n", cfg.UDPPayloadBytes)
-		size, err := db.SeedSize()
-		if err != nil {
+		if info, err := os.Stat(cfg.SeedPath); err == nil {
+			fmt.Printf("seed_file_bytes: %d\n", info.Size())
+		} else if os.IsNotExist(err) {
+			fmt.Printf("seed_file_bytes: %s\n", "missing")
+		} else {
 			return err
 		}
-		fmt.Printf("seed_bytes: %d\n", size)
 		return nil
 	}
 	if args[0] != "set" {
-		return fmt.Errorf("用法: nwall downmask config show|set ...")
+		return fmt.Errorf("用法: nwall downmask server show|set ...")
 	}
 	db, err := store.Open(storePath())
 	if err != nil {
@@ -321,16 +362,21 @@ func runConfig(args []string) error {
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("downmask config set", flag.ContinueOnError)
+	fs := flag.NewFlagSet("downmask server set", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var tcpAddr string
 	var udpAddr string
 	var token string
+	var seedPath string
 	var maxRate uint64
 	var udpPayload int
-	fs.StringVar(&tcpAddr, "tcp-addr", "", "TCP 监听地址，例 0.0.0.0:15301")
-	fs.StringVar(&udpAddr, "udp-addr", "", "UDP 监听地址，例 0.0.0.0:15301")
+	fs.StringVar(&tcpAddr, "tcp", "", "TCP 监听地址，例 0.0.0.0:15301")
+	fs.StringVar(&tcpAddr, "tcp-addr", "", "兼容旧选项：TCP 监听地址")
+	fs.StringVar(&udpAddr, "udp", "", "UDP 监听地址，例 0.0.0.0:15301")
+	fs.StringVar(&udpAddr, "udp-addr", "", "兼容旧选项：UDP 监听地址")
 	fs.StringVar(&token, "token", "", "下行伪装共享令牌")
+	fs.StringVar(&seedPath, "seed", "", "外部 seed 文件路径")
+	fs.StringVar(&seedPath, "seed-path", "", "外部 seed 文件路径")
 	fs.Uint64Var(&maxRate, "max-rate", 0, "服务端每会话最大发送速率 bytes/s，0 表示不限")
 	fs.IntVar(&udpPayload, "udp-payload-bytes", udpDefaultPayload, "UDP 单包 payload 字节")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -349,8 +395,23 @@ func runConfig(args []string) error {
 		}
 		cfg.UDPAddr = udpAddr
 	}
+	if seen["tcp"] {
+		if err := validateListenAddr("tcp", tcpAddr); err != nil {
+			return err
+		}
+		cfg.TCPAddr = tcpAddr
+	}
+	if seen["udp"] {
+		if err := validateListenAddr("udp", udpAddr); err != nil {
+			return err
+		}
+		cfg.UDPAddr = udpAddr
+	}
 	if seen["token"] {
 		cfg.Token = token
+	}
+	if seen["seed"] || seen["seed-path"] {
+		cfg.SeedPath = seedPath
 	}
 	if seen["max-rate"] {
 		cfg.MaxRate = maxRate
@@ -416,13 +477,13 @@ func runPolicy(args []string) error {
 		return nil
 	}
 	if args[0] != "set" {
-		return fmt.Errorf("用法: nwall downmask policy show|set ...")
+		return fmt.Errorf("用法: nwall downmask client show|set ...")
 	}
 	policy, err := db.LoadDownmaskPolicy()
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("downmask policy set", flag.ContinueOnError)
+	fs := flag.NewFlagSet("downmask client set", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	pullMode := fs.String("pull-mode", "", "off|ab")
 	iface := fs.String("iface", "", "统计网卡名")
@@ -492,6 +553,175 @@ func runPolicy(args []string) error {
 	return nil
 }
 
+func runClientSet(args []string) error {
+	db, err := store.Open(storePath())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	policy, err := db.LoadDownmaskPolicy()
+	if err != nil {
+		return err
+	}
+	cfg, err := db.LoadDownmaskABPullConfig()
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("downmask client set", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	off := fs.Bool("off", false, "关闭自动拉取")
+	iface := fs.String("iface", "", "统计网卡名")
+	minRatio := fs.Float64("min-ratio", 0, "每日随机目标比例下限")
+	maxRatio := fs.Float64("max-ratio", 0, "每日随机目标比例上限")
+	tws := fs.String("time-window-start", "", "HH:MM；留空表示全天")
+	twe := fs.String("time-window-end", "", "HH:MM；留空表示全天")
+	maxJitter := fs.Int("max-jitter", -1, "每次拉取后的最大随机等待秒数")
+	minDeficit := fs.Uint64("min-deficit-bytes", 0, "触发拉取的最小缺口字节")
+	maxRun := fs.Uint64("max-bytes-per-run", 0, "单次最大拉取字节")
+	protocol := fs.String("protocol", "", "tcp|udp")
+	mode := fs.String("protocol-mode", "", "single|parallel")
+	tcpEnabled := fs.String("tcp-enabled", "", "true|false")
+	udpEnabled := fs.String("udp-enabled", "", "true|false")
+	remotePort := fs.Int("remote-port", 0, "默认服务端端口")
+	localIP := fs.String("local-ip", "", "本地源 IP，可选")
+	token := fs.String("token", "", "默认下行伪装共享令牌")
+	speed := fs.String("speed-limit", "", "限速，例如 4194304、4M、32Mbps")
+	timeout := fs.Int("timeout", 0, "超时秒数")
+	parallelLimit := fs.Int("parallel-limit", 0, "并行协议数量上限")
+	speedJitter := fs.Int("speed-jitter-percent", -1, "速度随机浮动百分比")
+	bytesJitter := fs.Int("bytes-jitter-percent", -1, "字节数随机浮动百分比")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	seen := visitedFlags(fs)
+	if *off {
+		policy.PullMode = "off"
+	} else {
+		policy.PullMode = "ab"
+	}
+	if seen["iface"] {
+		policy.Iface = *iface
+	}
+	if seen["min-ratio"] {
+		if *minRatio <= 0 {
+			return errors.New("--min-ratio 必须 > 0")
+		}
+		policy.MinRatio = *minRatio
+	}
+	if seen["max-ratio"] {
+		if *maxRatio <= 0 {
+			return errors.New("--max-ratio 必须 > 0")
+		}
+		policy.MaxRatio = *maxRatio
+	}
+	if policy.MinRatio > policy.MaxRatio {
+		return errors.New("--min-ratio 不能大于 --max-ratio")
+	}
+	if seen["time-window-start"] {
+		if err := validateClockHHMM(*tws); err != nil {
+			return fmt.Errorf("--time-window-start %w", err)
+		}
+		policy.TimeWindowStart = *tws
+	}
+	if seen["time-window-end"] {
+		if err := validateClockHHMM(*twe); err != nil {
+			return fmt.Errorf("--time-window-end %w", err)
+		}
+		policy.TimeWindowEnd = *twe
+	}
+	if seen["max-jitter"] {
+		if *maxJitter < 0 {
+			return errors.New("--max-jitter 必须 >= 0")
+		}
+		policy.MaxJitterSeconds = *maxJitter
+	}
+	if seen["min-deficit-bytes"] {
+		policy.MinDeficitBytes = *minDeficit
+	}
+	if seen["max-bytes-per-run"] {
+		policy.MaxBytesPerRun = *maxRun
+	}
+	if seen["protocol"] {
+		if err := validateProtocol(*protocol); err != nil {
+			return err
+		}
+		cfg.Protocol = *protocol
+	}
+	if seen["protocol-mode"] {
+		if err := validateProtocolMode(*mode); err != nil {
+			return err
+		}
+		cfg.ProtocolMode = *mode
+	}
+	if seen["tcp-enabled"] {
+		value, err := parseBool(*tcpEnabled)
+		if err != nil {
+			return fmt.Errorf("--tcp-enabled %w", err)
+		}
+		cfg.TCPEnabled = value
+	}
+	if seen["udp-enabled"] {
+		value, err := parseBool(*udpEnabled)
+		if err != nil {
+			return fmt.Errorf("--udp-enabled %w", err)
+		}
+		cfg.UDPEnabled = value
+	}
+	if seen["remote-port"] {
+		if *remotePort < 0 || *remotePort > 65535 {
+			return errors.New("--remote-port 必须位于 0-65535")
+		}
+		cfg.RemotePort = *remotePort
+	}
+	if seen["local-ip"] {
+		if *localIP != "" && net.ParseIP(*localIP) == nil {
+			return fmt.Errorf("无效 --local-ip: %s", *localIP)
+		}
+		cfg.LocalIP = *localIP
+	}
+	if seen["token"] {
+		cfg.Token = *token
+	}
+	if seen["speed-limit"] {
+		if _, err := parseRateBytesPerSecond(*speed); err != nil {
+			return fmt.Errorf("--speed-limit %w", err)
+		}
+		cfg.SpeedLimit = *speed
+	}
+	if seen["timeout"] {
+		if *timeout < 0 {
+			return errors.New("--timeout 必须 >= 0")
+		}
+		cfg.TimeoutSeconds = *timeout
+	}
+	if seen["parallel-limit"] {
+		if *parallelLimit < 1 {
+			return errors.New("--parallel-limit 必须 >= 1")
+		}
+		cfg.ParallelLimit = *parallelLimit
+	}
+	if seen["speed-jitter-percent"] {
+		if err := validatePercent(*speedJitter); err != nil {
+			return fmt.Errorf("--speed-jitter-percent %w", err)
+		}
+		cfg.SpeedJitterPercent = *speedJitter
+	}
+	if seen["bytes-jitter-percent"] {
+		if err := validatePercent(*bytesJitter); err != nil {
+			return fmt.Errorf("--bytes-jitter-percent %w", err)
+		}
+		cfg.BytesJitterPercent = *bytesJitter
+	}
+	if err := db.SaveDownmaskPolicy(policy); err != nil {
+		return err
+	}
+	if err := db.SaveDownmaskABPullConfig(cfg); err != nil {
+		return err
+	}
+	fmt.Println("已更新下行伪装客户端配置")
+	return nil
+}
+
 func runABPullConfig(args []string) error {
 	if len(args) == 0 || args[0] == "show" {
 		return printABPullConfig()
@@ -502,7 +732,7 @@ func runABPullConfig(args []string) error {
 	case "targets":
 		return runABPullTargets(args[1:])
 	default:
-		return fmt.Errorf("用法: nwall downmask ab-pull show|set|targets ...")
+		return fmt.Errorf("用法: nwall downmask client show|set 或 nwall downmask target ...")
 	}
 }
 
@@ -546,7 +776,7 @@ func runABPullSet(args []string) error {
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("downmask ab-pull set", flag.ContinueOnError)
+	fs := flag.NewFlagSet("downmask client set", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	protocol := fs.String("protocol", "", "tcp|udp")
 	mode := fs.String("protocol-mode", "", "single|parallel")
@@ -669,7 +899,7 @@ func runABPullTargets(args []string) error {
 		return nil
 	case "delete", "del":
 		if len(args) != 2 {
-			return fmt.Errorf("用法: nwall downmask ab-pull targets delete <host>")
+			return fmt.Errorf("用法: nwall downmask target del <host>")
 		}
 		ok, err := db.DeleteDownmaskABTarget(args[1])
 		if err != nil {
@@ -683,13 +913,13 @@ func runABPullTargets(args []string) error {
 	case "add", "update":
 		return upsertABPullTarget(db, args[1:])
 	default:
-		return fmt.Errorf("用法: nwall downmask ab-pull targets list|add|update|delete|clear")
+		return fmt.Errorf("用法: nwall downmask target list|add|del")
 	}
 }
 
 func upsertABPullTarget(db *store.DB, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall downmask ab-pull targets add <host> [--port PORT] [--token TOKEN] [--local-ip IP] [--weight N]")
+		return fmt.Errorf("用法: nwall downmask target add <host> [--port PORT] [--token TOKEN] [--local-ip IP] [--weight N]")
 	}
 	target := store.DownmaskABTarget{
 		Host:       args[0],
@@ -700,7 +930,7 @@ func upsertABPullTarget(db *store.DB, args []string) error {
 	if strings.TrimSpace(target.Host) == "" {
 		return errors.New("host 不能为空")
 	}
-	fs := flag.NewFlagSet("downmask ab-pull targets add", flag.ContinueOnError)
+	fs := flag.NewFlagSet("downmask target add", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	port := fs.Int("port", 0, "目标端口，0=使用全局 remote_port")
 	token := fs.String("token", "", "目标专用下行伪装共享令牌")
@@ -791,7 +1021,7 @@ type effectiveABTarget struct {
 
 func runReconcile(args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("用法: nwall downmask reconcile")
+		return fmt.Errorf("用法: nwall downmask run")
 	}
 	db, err := store.Open(storePath())
 	if err != nil {
@@ -881,7 +1111,7 @@ func reconcileDownmask(db *store.DB) (reconcileResult, error) {
 		return reconcileResult{Action: "off", Reason: "pull_mode_off"}, nil
 	}
 	if strings.TrimSpace(policy.Iface) == "" {
-		return reconcileResult{}, errors.New("downmask policy iface 未设置")
+		return reconcileResult{}, errors.New("downmask client iface 未设置")
 	}
 
 	raw, err := readIfaceBytesFunc(policy.Iface)
@@ -949,6 +1179,11 @@ func reconcileDownmask(db *store.DB) (reconcileResult, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+// Reconcile executes one automatic downmask pull cycle.
+func Reconcile(db *store.DB) (reconcileResult, error) {
+	return reconcileDownmask(db)
 }
 
 func validatePolicy(policy store.DownmaskPolicy) error {
@@ -1945,13 +2180,38 @@ func runServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	db, dbSeed, err := applyDBServeDefaults(&opts)
+	db, err := applyDBServeDefaults(&opts)
 	if err != nil {
 		return err
 	}
 	if db != nil {
 		defer db.Close()
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runServeContext(ctx, opts, db)
+}
+
+// RunServerFromDB runs the downmask server from persisted DB configuration.
+func RunServerFromDB(ctx context.Context, db *store.DB) error {
+	var opts serveOptions
+	cfg, err := db.LoadDownmaskConfig()
+	if err != nil {
+		return err
+	}
+	opts.TCPAddr = cfg.TCPAddr
+	opts.UDPAddr = cfg.UDPAddr
+	opts.Token = cfg.Token
+	opts.SeedFile = cfg.SeedPath
+	opts.MaxRate = cfg.MaxRate
+	opts.UDPPayload = cfg.UDPPayloadBytes
+	if opts.UDPPayload == 0 {
+		opts.UDPPayload = udpDefaultPayload
+	}
+	return runServeContext(ctx, opts, db)
+}
+
+func runServeContext(ctx context.Context, opts serveOptions, db *store.DB) error {
 	if opts.Token == "" {
 		return errors.New("--token 必填")
 	}
@@ -1964,17 +2224,13 @@ func runServe(args []string) error {
 
 	var seed seedSource
 	var closeSeed func() error
-	if dbSeed != nil {
-		seed = dbSeed
-	} else {
-		var err error
-		seed, closeSeed, err = loadOrGenSeed(opts.SeedFile)
-		if err != nil {
-			return err
-		}
-		if closeSeed != nil {
-			defer closeSeed()
-		}
+	var err error
+	seed, closeSeed, err = loadOrGenSeed(opts.SeedFile)
+	if err != nil {
+		return err
+	}
+	if closeSeed != nil {
+		defer closeSeed()
 	}
 
 	expected := tokenDigest(opts.Token)
@@ -1982,17 +2238,10 @@ func runServe(args []string) error {
 		udpSessions: make(map[udpSessionKey]struct{}),
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	stop := make(chan struct{})
 	go func() {
-		for sig := range sigCh {
-			if sig == syscall.SIGHUP {
-				continue
-			}
-			close(stop)
-			return
-		}
+		<-ctx.Done()
+		close(stop)
 	}()
 
 	var wg sync.WaitGroup
@@ -2068,36 +2317,28 @@ func runServe(args []string) error {
 	return nil
 }
 
-func applyDBServeDefaults(opts *serveOptions) (*store.DB, seedSource, error) {
+func applyDBServeDefaults(opts *serveOptions) (*store.DB, error) {
 	if opts.Token != "" || opts.TCPAddr != "" || opts.UDPAddr != "" || opts.SeedFile != "" || opts.StatusFile != "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 	db, err := store.Open(storePath())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	cfg, err := db.LoadDownmaskConfig()
 	if err != nil {
 		db.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	opts.TCPAddr = cfg.TCPAddr
 	opts.UDPAddr = cfg.UDPAddr
 	opts.Token = cfg.Token
+	opts.SeedFile = cfg.SeedPath
 	opts.MaxRate = cfg.MaxRate
 	if cfg.UDPPayloadBytes != 0 {
 		opts.UDPPayload = cfg.UDPPayloadBytes
 	}
-	if err := db.EnsureBootstrapSeed(); err != nil {
-		db.Close()
-		return nil, nil, err
-	}
-	seed, err := db.NewSeedReader()
-	if err != nil {
-		db.Close()
-		return nil, nil, err
-	}
-	return db, seed, nil
+	return db, nil
 }
 
 func storePath() string {
@@ -2365,20 +2606,14 @@ func ipForFamily(localIP, remoteIP net.IP) (net.IP, error) {
 }
 
 func loadOrGenSeed(path string) (seedSource, func() error, error) {
-	if path != "" {
-		if reader, err := newFileSeedSource(path); err == nil {
-			return reader, reader.Close, nil
-		}
+	if strings.TrimSpace(path) == "" {
+		return nil, nil, errors.New("seed 文件路径为空，请先运行 nwall downmask seed")
 	}
-	buf := make([]byte, 8*1024*1024)
-	if _, err := rand.Read(buf); err != nil {
-		return nil, nil, err
-	}
-	reader, err := newSeedReader(buf)
+	reader, err := newFileSeedSource(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("读取 seed 文件失败 %s: %w", path, err)
 	}
-	return reader, nil, nil
+	return reader, reader.Close, nil
 }
 
 // ---- seed 子命令 ----
@@ -2391,25 +2626,28 @@ func runSeed(args []string) error {
 	fs.SetOutput(os.Stderr)
 	var path string
 	var size int64
-	fs.StringVar(&path, "path", "", "兼容旧用法：写入文件路径；默认写入 nwall.db")
-	fs.Int64Var(&size, "size", 1024*1024*1024, "种子文件字节大小；默认 1GB，推荐 256MB-4GB")
+	fs.StringVar(&path, "path", "", "seed 文件路径；默认读取 DB seed_path")
+	fs.Int64Var(&size, "size", store.DefaultSeedSize, "seed 文件字节大小；默认 1GB，推荐 256MB-4GB")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if size <= 0 {
 		return errors.New("--size 必须 > 0")
 	}
+	db, err := store.Open(storePath())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	cfg, err := db.LoadDownmaskConfig()
+	if err != nil {
+		return err
+	}
 	if path == "" {
-		db, err := store.Open(storePath())
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-		if err := db.GenerateDownmaskSeed(size); err != nil {
-			return err
-		}
-		fmt.Printf("seed 已生成到 DB: path=%s size=%d\n", storePath(), size)
-		return nil
+		path = cfg.SeedPath
+	}
+	if strings.TrimSpace(path) == "" {
+		path = store.DefaultDownmaskSeedPath
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -2423,6 +2661,7 @@ func runSeed(args []string) error {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 	}()
+	hash := sha256.New()
 	buf := make([]byte, 1024*1024)
 	var written int64
 	for written < size {
@@ -2431,6 +2670,9 @@ func runSeed(args []string) error {
 			toWrite = int64(len(buf))
 		}
 		if _, err := rand.Read(buf[:toWrite]); err != nil {
+			return err
+		}
+		if _, err := hash.Write(buf[:toWrite]); err != nil {
 			return err
 		}
 		if _, err := f.Write(buf[:toWrite]); err != nil {
@@ -2444,9 +2686,9 @@ func runSeed(args []string) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	hash := sha256.New()
-	if data, err := os.ReadFile(path); err == nil {
-		hash.Write(data)
+	cfg.SeedPath = path
+	if err := db.SaveDownmaskConfig(cfg); err != nil {
+		return err
 	}
 	fmt.Printf("seed 已生成: path=%s size=%d sha256=%s\n", path, size, hex.EncodeToString(hash.Sum(nil)))
 	return nil
