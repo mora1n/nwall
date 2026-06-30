@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mora1n/nwall/internal/store"
 )
 
 func TestHeaderAndSeed(t *testing.T) {
@@ -458,12 +460,360 @@ func TestRateLimiterShape(t *testing.T) {
 	}
 }
 
+func TestParseRateBytesPerSecond(t *testing.T) {
+	testCases := []struct {
+		raw  string
+		want uint64
+	}{
+		{raw: "", want: 0},
+		{raw: "4096", want: 4096},
+		{raw: "4M", want: 4 * 1024 * 1024},
+		{raw: "1.5M", want: 1572864},
+		{raw: "32Mbps", want: 4000000},
+		{raw: "2MB/s", want: 2000000},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := parseRateBytesPerSecond(tc.raw)
+			if err != nil {
+				t.Fatalf("parseRateBytesPerSecond(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseRateBytesPerSecond(%q) = %d, want %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDownmaskPolicyAndABPullCommandsUpdateDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "nwall.db")
+	t.Setenv("NWALL_DB", dbPath)
+	if err := runPolicy([]string{"set", "--pull-mode", "ab", "--iface", "eth0", "--min-ratio", "1.5", "--max-ratio", "2", "--max-jitter", "0", "--min-deficit-bytes", "1024", "--max-bytes-per-run", "2048"}); err != nil {
+		t.Fatalf("runPolicy: %v", err)
+	}
+	if err := runABPullSet([]string{"--protocol-mode", "parallel", "--tcp-enabled", "true", "--udp-enabled", "true", "--remote-port", "15301", "--token", "test-token", "--speed-limit", "4M", "--timeout", "30"}); err != nil {
+		t.Fatalf("runABPullSet: %v", err)
+	}
+	if err := runABPullTargets([]string{"add", "192.0.2.20", "--weight", "2", "--udp-enabled", "false"}); err != nil {
+		t.Fatalf("runABPullTargets: %v", err)
+	}
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	policy, err := db.LoadDownmaskPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.PullMode != "ab" || policy.Iface != "eth0" || policy.MinDeficitBytes != 1024 {
+		t.Fatalf("policy mismatch: %+v", policy)
+	}
+	cfg, err := db.LoadDownmaskABPullConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProtocolMode != "parallel" || !cfg.TCPEnabled || !cfg.UDPEnabled || cfg.RemotePort != 15301 {
+		t.Fatalf("config mismatch: %+v", cfg)
+	}
+	targets, err := db.LoadDownmaskABTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Host != "192.0.2.20" || targets[0].UDPEnabled {
+		t.Fatalf("targets mismatch: %+v", targets)
+	}
+}
+
+func TestReconcileSkipsBelowMinDeficit(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSavePolicy(t, db, store.DownmaskPolicy{
+		PullMode:        "ab",
+		Iface:           "eth0",
+		MinRatio:        1.5,
+		MaxRatio:        1.5,
+		MinDeficitBytes: 1024,
+	})
+	withMaskHooks(t, hookConfig{
+		now: func() time.Time { return time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC) },
+		read: func(string) (ifaceBytes, error) {
+			return ifaceBytes{RX: 1000, TX: 1000}, nil
+		},
+		randomIntn: func(int) (int, error) { return 0, nil },
+	})
+	if _, err := prepareDayState(db, store.DownmaskPolicy{PullMode: "ab", Iface: "eth0", MinRatio: 1.5, MaxRatio: 1.5}, ifaceBytes{RX: 1000, TX: 1000}); err != nil {
+		t.Fatalf("prepareDayState: %v", err)
+	}
+	readIfaceBytesFunc = func(string) (ifaceBytes, error) {
+		return ifaceBytes{RX: 1100, TX: 1200}, nil
+	}
+
+	result, err := reconcileDownmask(db)
+	if err != nil {
+		t.Fatalf("reconcileDownmask: %v", err)
+	}
+	if result.Action != "skip" || result.Reason != "below_min_deficit" || result.DebtBytes != 200 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	state, ok, err := db.LoadDownmaskDayState()
+	if err != nil || !ok {
+		t.Fatalf("LoadDownmaskDayState ok=%v err=%v", ok, err)
+	}
+	if state.RXAccum != 100 || state.TXAccum != 200 || state.LastError != "below_min_deficit" {
+		t.Fatalf("state mismatch: %+v", state)
+	}
+}
+
+func TestReconcilePullsDebtAndRecordsState(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSavePolicy(t, db, store.DownmaskPolicy{
+		PullMode:         "ab",
+		Iface:            "eth0",
+		MinRatio:         1.5,
+		MaxRatio:         1.5,
+		MaxJitterSeconds: 0,
+		MinDeficitBytes:  100,
+		MaxBytesPerRun:   500,
+		TimeWindowStart:  "",
+		TimeWindowEnd:    "",
+	})
+	mustSaveABConfig(t, db, store.DownmaskABPullConfig{
+		Protocol:       "tcp",
+		ProtocolMode:   "single",
+		TCPEnabled:     true,
+		RemotePort:     15301,
+		Token:          "test-token",
+		SpeedLimit:     "4M",
+		TimeoutSeconds: 30,
+		ParallelLimit:  1,
+	})
+	if err := db.UpsertDownmaskABTarget(store.DownmaskABTarget{Host: "192.0.2.20", Weight: 1, TCPEnabled: true, UDPEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	baseNow := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	pullCalls := 0
+	withMaskHooks(t, hookConfig{
+		now: func() time.Time { return baseNow },
+		read: func(string) (ifaceBytes, error) {
+			return ifaceBytes{RX: 1000, TX: 1000}, nil
+		},
+		pull: func(opts pullOptions) (uint64, error) {
+			pullCalls++
+			if opts.RemoteHost != "192.0.2.20" || opts.RemotePort != 15301 || opts.WantedBytes != 500 {
+				t.Fatalf("pull opts mismatch: %+v", opts)
+			}
+			return opts.WantedBytes, nil
+		},
+		randomIntn: func(int) (int, error) { return 0, nil },
+	})
+	if _, err := prepareDayState(db, store.DownmaskPolicy{PullMode: "ab", Iface: "eth0", MinRatio: 1.5, MaxRatio: 1.5}, ifaceBytes{RX: 1000, TX: 1000}); err != nil {
+		t.Fatalf("prepareDayState: %v", err)
+	}
+	readIfaceBytesFunc = func(string) (ifaceBytes, error) {
+		return ifaceBytes{RX: 1200, TX: 2000}, nil
+	}
+
+	result, err := reconcileDownmask(db)
+	if err != nil {
+		t.Fatalf("reconcileDownmask: %v", err)
+	}
+	if pullCalls != 1 {
+		t.Fatalf("pull calls = %d, want 1", pullCalls)
+	}
+	if result.Action != "ab" || result.PlannedBytes != 500 || result.ActualBytes != 500 || result.Reason != "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	state, ok, err := db.LoadDownmaskDayState()
+	if err != nil || !ok {
+		t.Fatalf("LoadDownmaskDayState ok=%v err=%v", ok, err)
+	}
+	if state.LastAction != "ab" || state.LastActualBytes != 500 || state.LastPlannedBytes != 500 {
+		t.Fatalf("state mismatch: %+v", state)
+	}
+}
+
+func TestReconcileNewDayUsesHistory(t *testing.T) {
+	db := openMaskTestDB(t)
+	prev := 1.5
+	if err := db.SaveDownmaskRatioHistory(store.DownmaskRatioHistory{
+		Date:             "2026-06-29",
+		TargetRatio:      prev,
+		GenerationSource: "fresh_init",
+		GeneratedAt:      "2026-06-29T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy := store.DownmaskPolicy{PullMode: "ab", Iface: "eth0", MinRatio: 1.5, MaxRatio: 1.5}
+	withMaskHooks(t, hookConfig{
+		now:        func() time.Time { return time.Date(2026, 6, 30, 0, 1, 0, 0, time.UTC) },
+		randomIntn: func(int) (int, error) { return 0, nil },
+	})
+	state, err := prepareDayState(db, policy, ifaceBytes{RX: 10, TX: 20})
+	if err != nil {
+		t.Fatalf("prepareDayState: %v", err)
+	}
+	if state.PreviousTargetRatio == nil || *state.PreviousTargetRatio != prev || state.GenerationSource != "rollover_history_fallback" {
+		t.Fatalf("previous history not used: %+v", state)
+	}
+	if state.TargetRatio != 1.5 {
+		t.Fatalf("target ratio = %f, want 1.5", state.TargetRatio)
+	}
+}
+
+func TestABTargetFallback(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSaveABConfig(t, db, store.DownmaskABPullConfig{
+		Protocol:       "tcp",
+		ProtocolMode:   "single",
+		TCPEnabled:     true,
+		RemotePort:     15301,
+		Token:          "test-token",
+		SpeedLimit:     "0",
+		TimeoutSeconds: 30,
+		ParallelLimit:  1,
+	})
+	for _, host := range []string{"192.0.2.10", "192.0.2.20"} {
+		if err := db.UpsertDownmaskABTarget(store.DownmaskABTarget{Host: host, Weight: 1, TCPEnabled: true, UDPEnabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := []string{}
+	withMaskHooks(t, hookConfig{
+		randomIntn: func(int) (int, error) { return 0, nil },
+		pull: func(opts pullOptions) (uint64, error) {
+			calls = append(calls, opts.RemoteHost)
+			if opts.RemoteHost == "192.0.2.10" {
+				return 0, errors.New("dial failed")
+			}
+			return 1234, nil
+		},
+	})
+	actual, err := pullAB(db, 2048)
+	if err != nil {
+		t.Fatalf("pullAB: %v", err)
+	}
+	if actual != 1234 {
+		t.Fatalf("actual = %d, want 1234", actual)
+	}
+	if strings.Join(calls, ",") != "192.0.2.10,192.0.2.20" {
+		t.Fatalf("fallback calls = %v", calls)
+	}
+}
+
+func TestStatusShowsDynamicState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "nwall.db")
+	t.Setenv("NWALL_DB", dbPath)
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustSavePolicy(t, db, store.DownmaskPolicy{PullMode: "ab", Iface: "eth0", MinRatio: 1.5, MaxRatio: 2, MinDeficitBytes: 1024})
+	mustSaveABConfig(t, db, store.DownmaskABPullConfig{Protocol: "tcp", ProtocolMode: "single", TCPEnabled: true, RemotePort: 15301, SpeedLimit: "4M", TimeoutSeconds: 30, ParallelLimit: 1})
+	if err := db.SaveDownmaskDayState(store.DownmaskDayState{
+		Date:             "2026-06-30",
+		Iface:            "eth0",
+		TargetRatio:      1.5,
+		RXAccum:          100,
+		TXAccum:          200,
+		GenerationSource: "fresh_init",
+		GeneratedAt:      "2026-06-30T00:00:00Z",
+		LastAction:       "skip",
+		LastError:        "below_min_deficit",
+		UpdatedAt:        "2026-06-30T00:01:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout, restore := captureStdout(t)
+	defer restore()
+	if err := runStatus(nil); err != nil {
+		t.Fatalf("runStatus: %v", err)
+	}
+	got := stdout()
+	for _, want := range []string{"pull_mode: ab", "iface: eth0", "debt_bytes: 200", "last_error: below_min_deficit"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func newTestSeed(size int) []byte {
 	seed := make([]byte, size)
 	for i := range seed {
 		seed[i] = byte(i)
 	}
 	return seed
+}
+
+type hookConfig struct {
+	now        func() time.Time
+	read       func(string) (ifaceBytes, error)
+	pull       func(pullOptions) (uint64, error)
+	randomIntn func(int) (int, error)
+}
+
+func withMaskHooks(t *testing.T, cfg hookConfig) {
+	t.Helper()
+	oldNow := nowFunc
+	oldRead := readIfaceBytesFunc
+	oldPull := pullOnceFunc
+	oldRandom := randomIntnFunc
+	if cfg.now != nil {
+		nowFunc = cfg.now
+	}
+	if cfg.read != nil {
+		readIfaceBytesFunc = cfg.read
+	}
+	if cfg.pull != nil {
+		pullOnceFunc = cfg.pull
+	}
+	if cfg.randomIntn != nil {
+		randomIntnFunc = cfg.randomIntn
+	}
+	t.Cleanup(func() {
+		nowFunc = oldNow
+		readIfaceBytesFunc = oldRead
+		pullOnceFunc = oldPull
+		randomIntnFunc = oldRandom
+	})
+}
+
+func openMaskTestDB(t *testing.T) *store.DB {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "nwall.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func mustSavePolicy(t *testing.T, db *store.DB, policy store.DownmaskPolicy) {
+	t.Helper()
+	if policy.MaxRatio == 0 {
+		policy.MaxRatio = policy.MinRatio
+	}
+	if err := db.SaveDownmaskPolicy(policy); err != nil {
+		t.Fatalf("SaveDownmaskPolicy: %v", err)
+	}
+}
+
+func mustSaveABConfig(t *testing.T, db *store.DB, cfg store.DownmaskABPullConfig) {
+	t.Helper()
+	if cfg.ParallelLimit == 0 {
+		cfg.ParallelLimit = 1
+	}
+	if cfg.TimeoutSeconds == 0 {
+		cfg.TimeoutSeconds = 30
+	}
+	if cfg.SpeedLimit == "" {
+		cfg.SpeedLimit = "0"
+	}
+	if err := db.SaveDownmaskABPullConfig(cfg); err != nil {
+		t.Fatalf("SaveDownmaskABPullConfig: %v", err)
+	}
 }
 
 func startPullTestServer(t *testing.T, protocol, serverToken string, seed []byte, status *serveStatus) (int, func()) {

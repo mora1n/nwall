@@ -26,7 +26,24 @@ const (
 	defaultRepo       = "mora1n/nwall"
 )
 
-var adminUnits = []string{"nwall.service", "nwall-dpi.service", "nwall-lease.service", "nwall-lease-trigger.service", "nwall-downmask.service"}
+var managedUnits = []string{
+	"nwall.service",
+	"nwall-dpi.service",
+	"nwall-lease.service",
+	"nwall-lease-trigger.service",
+	"nwall-downmask.service",
+	"nwall-downmask-reconcile.service",
+	"nwall-downmask-reconcile.timer",
+}
+
+var restartableUnits = []string{
+	"nwall.service",
+	"nwall-dpi.service",
+	"nwall-lease.service",
+	"nwall-lease-trigger.service",
+	"nwall-downmask.service",
+	"nwall-downmask-reconcile.timer",
+}
 
 func runUninstall(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
@@ -79,7 +96,7 @@ func uninstall(opts adminOptions) error {
 	if opts.ConfigMode == "" {
 		opts.ConfigMode = "ask"
 	}
-	disableArgs := append([]string{"disable", "--now"}, adminUnits...)
+	disableArgs := append([]string{"disable", "--now"}, managedUnits...)
 	if err := systemctl(opts.DryRun, disableArgs...); err != nil {
 		fmt.Fprintf(os.Stderr, "停止服务失败（继续卸载）: %v\n", err)
 	}
@@ -92,7 +109,7 @@ func uninstall(opts adminOptions) error {
 	if err := remove(opts.DryRun, binPath); err != nil {
 		return err
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		if err := remove(opts.DryRun, filepath.Join(opts.SystemdDir, unit)); err != nil {
 			return err
 		}
@@ -349,7 +366,7 @@ func backupInstall(opts adminOptions, tmpDir string) (string, error) {
 	if err := copyFile(binPath, filepath.Join(backupDir, "nwall"), 0o755); err != nil {
 		return "", err
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		if err := copyIfExists(filepath.Join(opts.SystemdDir, unit), filepath.Join(backupDir, "systemd", unit)); err != nil {
 			return "", err
 		}
@@ -370,7 +387,7 @@ func installReleasePayload(srcDir string, opts adminOptions) error {
 	if err := os.MkdirAll(opts.SystemdDir, 0o755); err != nil {
 		return err
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		src := filepath.Join(srcDir, "systemd", unit)
 		if err := copyFile(src, filepath.Join(opts.SystemdDir, unit), 0o644); err != nil {
 			return err
@@ -388,7 +405,7 @@ func validateReleasePayload(srcDir string) error {
 	if info.IsDir() || info.Mode().Perm()&0o111 == 0 {
 		return fmt.Errorf("release payload nwall is not executable: %s", bin)
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		path := filepath.Join(srcDir, "systemd", unit)
 		if info, err := os.Stat(path); err != nil {
 			return fmt.Errorf("release payload missing %s: %w", unit, err)
@@ -405,7 +422,7 @@ func restoreInstall(opts adminOptions, backupDir string, services []string) erro
 			return err
 		}
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		src := filepath.Join(backupDir, "systemd", unit)
 		dst := filepath.Join(opts.SystemdDir, unit)
 		if fileExists(src) {
@@ -425,7 +442,7 @@ func restoreInstall(opts adminOptions, backupDir string, services []string) erro
 
 func activeOrEnabledUnits() []string {
 	out := []string{}
-	for _, unit := range adminUnits {
+	for _, unit := range restartableUnits {
 		if systemctlQuiet("is-enabled", unit) || systemctlQuiet("is-active", unit) {
 			out = append(out, unit)
 		}
@@ -455,7 +472,7 @@ func healthCheck(opts adminOptions, services []string) error {
 			continue
 		}
 		if !systemctlQuiet("is-active", unit) {
-			return fmt.Errorf("service health-check failed: %s is not active", unit)
+			return fmt.Errorf("unit health-check failed: %s is not active", unit)
 		}
 	}
 	return nil

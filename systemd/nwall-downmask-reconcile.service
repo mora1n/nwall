@@ -1,0 +1,8 @@
+[Unit]
+Description=nwall downmask reconcile
+After=network-online.target nwall-downmask.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env /usr/local/bin/nwall downmask reconcile

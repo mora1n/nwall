@@ -123,6 +123,118 @@ func TestDownmaskSeedChunks(t *testing.T) {
 	}
 }
 
+func TestDownmaskDynamicTablesRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	policy := DownmaskPolicy{
+		PullMode:         "ab",
+		Iface:            "eth0",
+		MinRatio:         1.25,
+		MaxRatio:         1.75,
+		TimeWindowStart:  "01:00",
+		TimeWindowEnd:    "23:00",
+		MaxJitterSeconds: 9,
+		MinDeficitBytes:  1024,
+		MaxBytesPerRun:   4096,
+	}
+	if err := db.SaveDownmaskPolicy(policy); err != nil {
+		t.Fatalf("SaveDownmaskPolicy: %v", err)
+	}
+	gotPolicy, err := db.LoadDownmaskPolicy()
+	if err != nil {
+		t.Fatalf("LoadDownmaskPolicy: %v", err)
+	}
+	if gotPolicy != policy {
+		t.Fatalf("policy mismatch: %+v", gotPolicy)
+	}
+
+	cfg := DownmaskABPullConfig{
+		Protocol:           "udp",
+		ProtocolMode:       "parallel",
+		TCPEnabled:         true,
+		UDPEnabled:         true,
+		RemotePort:         15301,
+		LocalIP:            "192.0.2.10",
+		Token:              "test-token",
+		SpeedLimit:         "4M",
+		TimeoutSeconds:     300,
+		ParallelLimit:      2,
+		SpeedJitterPercent: 12,
+		BytesJitterPercent: 18,
+	}
+	if err := db.SaveDownmaskABPullConfig(cfg); err != nil {
+		t.Fatalf("SaveDownmaskABPullConfig: %v", err)
+	}
+	gotCfg, err := db.LoadDownmaskABPullConfig()
+	if err != nil {
+		t.Fatalf("LoadDownmaskABPullConfig: %v", err)
+	}
+	if gotCfg != cfg {
+		t.Fatalf("ab config mismatch: %+v", gotCfg)
+	}
+
+	target := DownmaskABTarget{Host: "192.0.2.20", Port: 15301, Weight: 3, TCPEnabled: true}
+	if err := db.UpsertDownmaskABTarget(target); err != nil {
+		t.Fatalf("UpsertDownmaskABTarget: %v", err)
+	}
+	targets, err := db.LoadDownmaskABTargets()
+	if err != nil {
+		t.Fatalf("LoadDownmaskABTargets: %v", err)
+	}
+	if len(targets) != 1 || targets[0].Host != target.Host || targets[0].Weight != 3 || targets[0].UDPEnabled {
+		t.Fatalf("target mismatch: %+v", targets)
+	}
+
+	prev := 1.5
+	state := DownmaskDayState{
+		Date:                "2026-06-30",
+		Iface:               "eth0",
+		TargetRatio:         1.6,
+		RXAccum:             100,
+		TXAccum:             200,
+		LastRXRaw:           1000,
+		LastTXRaw:           2000,
+		NextEligibleAt:      42,
+		PreviousDate:        "2026-06-29",
+		PreviousTargetRatio: &prev,
+		GenerationSource:    "rollover_state",
+		GeneratedAt:         "2026-06-30T00:00:00Z",
+		LastAction:          "ab",
+		LastActualBytes:     300,
+		LastPlannedBytes:    400,
+		LastError:           "",
+		UpdatedAt:           "2026-06-30T00:01:00Z",
+	}
+	if err := db.SaveDownmaskDayState(state); err != nil {
+		t.Fatalf("SaveDownmaskDayState: %v", err)
+	}
+	gotState, ok, err := db.LoadDownmaskDayState()
+	if err != nil || !ok {
+		t.Fatalf("LoadDownmaskDayState ok=%v err=%v", ok, err)
+	}
+	if gotState.PreviousTargetRatio == nil || *gotState.PreviousTargetRatio != prev || gotState.LastActualBytes != 300 {
+		t.Fatalf("state mismatch: %+v", gotState)
+	}
+
+	history := DownmaskRatioHistory{
+		Date:                state.Date,
+		TargetRatio:         state.TargetRatio,
+		PreviousDate:        state.PreviousDate,
+		PreviousTargetRatio: state.PreviousTargetRatio,
+		GenerationSource:    state.GenerationSource,
+		GeneratedAt:         state.GeneratedAt,
+	}
+	if err := db.SaveDownmaskRatioHistory(history); err != nil {
+		t.Fatalf("SaveDownmaskRatioHistory: %v", err)
+	}
+	gotHistory, ok, err := db.DownmaskRatioHistoryForDate(state.Date)
+	if err != nil || !ok {
+		t.Fatalf("DownmaskRatioHistoryForDate ok=%v err=%v", ok, err)
+	}
+	if gotHistory.TargetRatio != history.TargetRatio || gotHistory.PreviousTargetRatio == nil {
+		t.Fatalf("history mismatch: %+v", gotHistory)
+	}
+}
+
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), "nwall.db"))

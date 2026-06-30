@@ -132,6 +132,10 @@ install_from_dir() {
       [[ -e "$unit" ]] || continue
       run install -m 0644 "$unit" "$SYSTEMD_DIR/$(basename "$unit")"
     done
+    for unit in "$unit_dir"/*.timer; do
+      [[ -e "$unit" ]] || continue
+      run install -m 0644 "$unit" "$SYSTEMD_DIR/$(basename "$unit")"
+    done
   fi
 }
 

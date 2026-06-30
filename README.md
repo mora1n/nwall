@@ -9,7 +9,7 @@
 - 地区白名单按省份/城市选择
 - 入站白名单、出站白名单、端口覆盖策略
 - TCP 租约：默认放行访问来源 IPv4 所在 C 段，可按请求改成单 IP
-- 下行伪装：按共享令牌向客户端发送指定体量的随机下行流量
+- 下行伪装：按网卡流量缺口自动拉取随机下行流量
 
 ## 安装
 
@@ -49,7 +49,9 @@ nwall
 
 `nwall` 运行在被保护的机器上，只管理本机访问规则。通过 TUI 或 CLI 修改配置，再执行 `nwall protect apply --confirm` 让规则生效；如果没有及时确认，nwall 会自动回滚，避免远程机器被错误规则锁死。
 
-入站白名单决定哪些来源能访问本机服务；TCP 租约用于临时放行访问者，IPv4 默认放行来源 IP 所在 C 段，也可以用 `mask=32` 只放行单个 IP。公网入口可以运行 `lease trigger`，把 `/<token>` 访问转换成发往安装机的 TCP 租约消息；`<token>` 没有默认值，必须由用户显式配置。下行伪装按共享令牌校验客户端，然后发送指定体量的下行流量。
+入站白名单决定哪些来源能访问本机服务；TCP 租约用于临时放行访问者，IPv4 默认放行来源 IP 所在 C 段，也可以用 `mask=32` 只放行单个 IP。公网入口可以运行 `lease trigger`，把 `/<token>` 访问转换成发往安装机的 TCP 租约消息；`<token>` 没有默认值，必须由用户显式配置。
+
+下行伪装分成两端：服务端运行 `downmask serve`，按共享令牌发送随机流量；客户端运行 `downmask reconcile`，读取本机网卡 RX/TX 计数，按每日随机比例计算下行缺口，并从配置的服务端目标自动拉取。
 
 ## 常用命令
 
@@ -149,13 +151,44 @@ nwall downmask seed --size 268435456
 systemctl enable --now nwall-downmask.service
 ```
 
+同时启用 TCP 和 UDP：
+
+```bash
+nwall downmask config set --tcp-addr 0.0.0.0:15301 --udp-addr 0.0.0.0:15301 --token "$DOWNMASK_TOKEN"
+systemctl restart nwall-downmask.service
+```
+
 客户端拉取 1 GiB 下行流量：
 
 ```bash
 nwall downmask pull --protocol tcp --remote-host 203.0.113.10 --remote-port 15301 --token "$DOWNMASK_TOKEN" --wanted-bytes 1073741824
 ```
 
-`DOWNMASK_TOKEN` 是服务端和客户端一致的下行伪装共享令牌。它只用于下行伪装鉴权，不是公网触发器 URL 中的 `<token>`，也不是加密密钥。
+自动拉取：
+
+```bash
+nwall downmask policy set --pull-mode ab --iface eth0 --min-ratio 1.5 --max-ratio 2.0 --min-deficit-bytes 20971520 --max-bytes-per-run 524288000 --max-jitter 60
+nwall downmask ab-pull set --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token "$DOWNMASK_TOKEN" --speed-limit 4M --timeout 300 --speed-jitter-percent 12 --bytes-jitter-percent 18
+nwall downmask ab-pull targets add 192.0.2.20 --weight 1
+systemctl enable --now nwall-downmask-reconcile.timer
+```
+
+多服务端目标：
+
+```bash
+nwall downmask ab-pull targets add 192.0.2.20 --weight 2
+nwall downmask ab-pull targets add 198.51.100.20 --weight 1 --tcp-enabled true --udp-enabled false
+nwall downmask ab-pull targets list
+```
+
+查看状态和手动执行：
+
+```bash
+nwall downmask status
+nwall downmask reconcile
+```
+
+`DOWNMASK_TOKEN` 是服务端和客户端一致的下行伪装共享令牌。它只用于下行伪装鉴权，不是公网触发器 URL 中的 `<token>`，也不是加密密钥。`policy` 控制何时拉取，`ab-pull` 控制从哪些服务端拉取，`reconcile` 执行一次缺口计算和拉取。
 
 ## 更新
 
@@ -241,6 +274,8 @@ nwall uninstall --purge-config
 | `nwall-lease.service` | TCP 租约 agent |
 | `nwall-lease-trigger.service` | 公网 token 触发器 |
 | `nwall-downmask.service` | 下行伪装服务 |
+| `nwall-downmask-reconcile.service` | 执行一次下行伪装自动拉取 |
+| `nwall-downmask-reconcile.timer` | 定时触发下行伪装自动拉取 |
 
 ## 发布打包
 
@@ -264,6 +299,7 @@ nwall
 install.sh
 uninstall.sh
 systemd/*.service
+systemd/*.timer
 README.md
 ```
 

@@ -264,7 +264,7 @@ func TestValidateReleasePayload(t *testing.T) {
 	if err := os.MkdirAll(systemdDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, unit := range adminUnits {
+	for _, unit := range managedUnits {
 		if err := os.WriteFile(filepath.Join(systemdDir, unit), []byte("[Unit]\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}

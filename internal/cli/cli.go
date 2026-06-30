@@ -297,13 +297,20 @@ func printUsage(w *os.File) {
   nwall lease trigger-config set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32
   nwall lease trigger-route add <token> --label <label> --target 192.0.2.10:19082 --idle-ttl 3d
   nwall lease trigger                                  # GET /<token>?mask=24 触发 TCP 租约
-  nwall downmask config set --tcp-addr 0.0.0.0:15301 --token <downmask-token>
-  nwall downmask serve                                  # <downmask-token> 是下行伪装共享令牌
+  nwall downmask config set --tcp-addr 0.0.0.0:15301 --udp-addr 0.0.0.0:15301 --token <downmask-token>
+  nwall downmask seed --size 268435456
+  nwall downmask serve                                  # 服务端发送下行伪装流量
+  nwall downmask policy set --pull-mode ab --iface eth0 --min-ratio 1.5 --max-ratio 2
+  nwall downmask ab-pull set --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token <downmask-token>
+  nwall downmask ab-pull targets add 192.0.2.20 --weight 1
+  nwall downmask reconcile                              # 按 RX/TX 缺口拉取
+  nwall downmask status
   nwall geo export|refresh ...
   nwall update [--version vX.Y.Z]
   nwall uninstall [--keep-config|--purge-config]
   nwall version
 
 说明:
+  <token> 是公网触发器 URL 令牌；<downmask-token> 是下行伪装共享令牌，二者互不通用。
   配置和运行状态保存在 /var/lib/nwall/nwall.db；执行 nwall protect apply --confirm 后才会应用规则。`)
 }

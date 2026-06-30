@@ -170,6 +170,70 @@ func (db *DB) init(ctx context.Context) error {
 			total_bytes_sent INTEGER NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS downmask_policy(
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			pull_mode TEXT NOT NULL,
+			iface TEXT NOT NULL,
+			min_ratio REAL NOT NULL,
+			max_ratio REAL NOT NULL,
+			time_window_start TEXT NOT NULL,
+			time_window_end TEXT NOT NULL,
+			max_jitter_seconds INTEGER NOT NULL,
+			min_deficit_bytes INTEGER NOT NULL,
+			max_bytes_per_run INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS downmask_ab_pull_config(
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			protocol TEXT NOT NULL,
+			protocol_mode TEXT NOT NULL,
+			tcp_enabled INTEGER NOT NULL,
+			udp_enabled INTEGER NOT NULL,
+			remote_port INTEGER NOT NULL,
+			local_ip TEXT NOT NULL,
+			token TEXT NOT NULL,
+			speed_limit TEXT NOT NULL,
+			timeout_seconds INTEGER NOT NULL,
+			parallel_limit INTEGER NOT NULL,
+			speed_jitter_percent INTEGER NOT NULL,
+			bytes_jitter_percent INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS downmask_ab_pull_targets(
+			host TEXT PRIMARY KEY,
+			port INTEGER NOT NULL,
+			token TEXT NOT NULL,
+			local_ip TEXT NOT NULL,
+			weight INTEGER NOT NULL,
+			tcp_enabled INTEGER NOT NULL,
+			udp_enabled INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS downmask_day_state(
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			date TEXT NOT NULL,
+			iface TEXT NOT NULL,
+			target_ratio REAL NOT NULL,
+			rx_accum INTEGER NOT NULL,
+			tx_accum INTEGER NOT NULL,
+			last_rx_raw INTEGER NOT NULL,
+			last_tx_raw INTEGER NOT NULL,
+			next_eligible_at INTEGER NOT NULL,
+			previous_date TEXT NOT NULL,
+			previous_target_ratio REAL,
+			generation_source TEXT NOT NULL,
+			generated_at TEXT NOT NULL,
+			last_action TEXT NOT NULL,
+			last_actual_bytes INTEGER NOT NULL,
+			last_planned_bytes INTEGER NOT NULL,
+			last_error TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS downmask_ratio_history(
+			date TEXT PRIMARY KEY,
+			target_ratio REAL NOT NULL,
+			previous_date TEXT NOT NULL,
+			previous_target_ratio REAL,
+			generation_source TEXT NOT NULL,
+			generated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS runtime_state(
 			key TEXT PRIMARY KEY,
 			text_value TEXT NOT NULL,
@@ -253,6 +317,14 @@ func (db *DB) ensureDefaults(ctx context.Context) error {
 		return err
 	}
 	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_config(id, tcp_addr, udp_addr, token, max_rate, udp_payload_bytes) VALUES(1, '', '', '', 0, 1200)`); err != nil {
+		return err
+	}
+	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_policy(id, pull_mode, iface, min_ratio, max_ratio, time_window_start, time_window_end, max_jitter_seconds, min_deficit_bytes, max_bytes_per_run)
+		VALUES(1, 'off', '', 1.5, 2.0, '', '', 60, 20971520, 524288000)`); err != nil {
+		return err
+	}
+	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_ab_pull_config(id, protocol, protocol_mode, tcp_enabled, udp_enabled, remote_port, local_ip, token, speed_limit, timeout_seconds, parallel_limit, speed_jitter_percent, bytes_jitter_percent)
+		VALUES(1, 'tcp', 'single', 1, 0, 0, '', '', '4M', 1200, 2, 0, 0)`); err != nil {
 		return err
 	}
 	if needsDefaultSeed {
@@ -1022,6 +1094,281 @@ func (db *DB) SaveDownmaskStatus(s DownmaskStatus) error {
 			total_bytes_sent=excluded.total_bytes_sent, updated_at=excluded.updated_at`,
 		s.StartedAt, boolInt(s.TCPListening), boolInt(s.UDPListening), s.BindIP, s.TCPPort, s.UDPPort, s.ActiveSessions, int64(s.TotalBytesSent), s.UpdatedAt)
 	return err
+}
+
+// LoadDownmaskStatus loads the most recent downmask server status snapshot.
+func (db *DB) LoadDownmaskStatus() (DownmaskStatus, bool, error) {
+	var s DownmaskStatus
+	var tcp, udp boolScan
+	err := db.sql.QueryRow(`SELECT started_at, tcp_listening, udp_listening, bind_ip, tcp_port, udp_port, active_sessions, total_bytes_sent, updated_at FROM downmask_status WHERE id=1`).
+		Scan(&s.StartedAt, &tcp, &udp, &s.BindIP, &s.TCPPort, &s.UDPPort, &s.ActiveSessions, &s.TotalBytesSent, &s.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DownmaskStatus{}, false, nil
+	}
+	if err != nil {
+		return DownmaskStatus{}, false, err
+	}
+	s.TCPListening = bool(tcp)
+	s.UDPListening = bool(udp)
+	return s, true, nil
+}
+
+// DownmaskPolicy controls automatic downmask pull reconciliation.
+type DownmaskPolicy struct {
+	PullMode         string
+	Iface            string
+	MinRatio         float64
+	MaxRatio         float64
+	TimeWindowStart  string
+	TimeWindowEnd    string
+	MaxJitterSeconds int
+	MinDeficitBytes  uint64
+	MaxBytesPerRun   uint64
+}
+
+// LoadDownmaskPolicy loads automatic downmask policy.
+func (db *DB) LoadDownmaskPolicy() (DownmaskPolicy, error) {
+	var p DownmaskPolicy
+	var minDeficit, maxRun int64
+	err := db.sql.QueryRow(`SELECT pull_mode, iface, min_ratio, max_ratio, time_window_start, time_window_end, max_jitter_seconds, min_deficit_bytes, max_bytes_per_run FROM downmask_policy WHERE id=1`).
+		Scan(&p.PullMode, &p.Iface, &p.MinRatio, &p.MaxRatio, &p.TimeWindowStart, &p.TimeWindowEnd, &p.MaxJitterSeconds, &minDeficit, &maxRun)
+	if err != nil {
+		return DownmaskPolicy{}, err
+	}
+	p.MinDeficitBytes = uint64(minDeficit)
+	p.MaxBytesPerRun = uint64(maxRun)
+	return p, nil
+}
+
+// SaveDownmaskPolicy stores automatic downmask policy.
+func (db *DB) SaveDownmaskPolicy(p DownmaskPolicy) error {
+	_, err := db.sql.Exec(`UPDATE downmask_policy SET pull_mode=?, iface=?, min_ratio=?, max_ratio=?, time_window_start=?, time_window_end=?, max_jitter_seconds=?, min_deficit_bytes=?, max_bytes_per_run=? WHERE id=1`,
+		p.PullMode, p.Iface, p.MinRatio, p.MaxRatio, p.TimeWindowStart, p.TimeWindowEnd, p.MaxJitterSeconds, int64(p.MinDeficitBytes), int64(p.MaxBytesPerRun))
+	return err
+}
+
+// DownmaskABPullConfig controls AB downmask pull behavior.
+type DownmaskABPullConfig struct {
+	Protocol           string
+	ProtocolMode       string
+	TCPEnabled         bool
+	UDPEnabled         bool
+	RemotePort         int
+	LocalIP            string
+	Token              string
+	SpeedLimit         string
+	TimeoutSeconds     int
+	ParallelLimit      int
+	SpeedJitterPercent int
+	BytesJitterPercent int
+}
+
+// LoadDownmaskABPullConfig loads AB pull config.
+func (db *DB) LoadDownmaskABPullConfig() (DownmaskABPullConfig, error) {
+	var cfg DownmaskABPullConfig
+	var tcp, udp boolScan
+	err := db.sql.QueryRow(`SELECT protocol, protocol_mode, tcp_enabled, udp_enabled, remote_port, local_ip, token, speed_limit, timeout_seconds, parallel_limit, speed_jitter_percent, bytes_jitter_percent FROM downmask_ab_pull_config WHERE id=1`).
+		Scan(&cfg.Protocol, &cfg.ProtocolMode, &tcp, &udp, &cfg.RemotePort, &cfg.LocalIP, &cfg.Token, &cfg.SpeedLimit, &cfg.TimeoutSeconds, &cfg.ParallelLimit, &cfg.SpeedJitterPercent, &cfg.BytesJitterPercent)
+	if err != nil {
+		return DownmaskABPullConfig{}, err
+	}
+	cfg.TCPEnabled = bool(tcp)
+	cfg.UDPEnabled = bool(udp)
+	return cfg, nil
+}
+
+// SaveDownmaskABPullConfig stores AB pull config.
+func (db *DB) SaveDownmaskABPullConfig(cfg DownmaskABPullConfig) error {
+	_, err := db.sql.Exec(`UPDATE downmask_ab_pull_config SET protocol=?, protocol_mode=?, tcp_enabled=?, udp_enabled=?, remote_port=?, local_ip=?, token=?, speed_limit=?, timeout_seconds=?, parallel_limit=?, speed_jitter_percent=?, bytes_jitter_percent=? WHERE id=1`,
+		cfg.Protocol, cfg.ProtocolMode, boolInt(cfg.TCPEnabled), boolInt(cfg.UDPEnabled), cfg.RemotePort, cfg.LocalIP, cfg.Token, cfg.SpeedLimit, cfg.TimeoutSeconds, cfg.ParallelLimit, cfg.SpeedJitterPercent, cfg.BytesJitterPercent)
+	return err
+}
+
+// DownmaskABTarget describes one AB pull target.
+type DownmaskABTarget struct {
+	Host       string
+	Port       int
+	Token      string
+	LocalIP    string
+	Weight     int
+	TCPEnabled bool
+	UDPEnabled bool
+}
+
+// LoadDownmaskABTargets loads AB targets ordered by host.
+func (db *DB) LoadDownmaskABTargets() ([]DownmaskABTarget, error) {
+	rows, err := db.sql.Query(`SELECT host, port, token, local_ip, weight, tcp_enabled, udp_enabled FROM downmask_ab_pull_targets ORDER BY host`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DownmaskABTarget
+	for rows.Next() {
+		var t DownmaskABTarget
+		var tcp, udp boolScan
+		if err := rows.Scan(&t.Host, &t.Port, &t.Token, &t.LocalIP, &t.Weight, &tcp, &udp); err != nil {
+			return nil, err
+		}
+		t.TCPEnabled = bool(tcp)
+		t.UDPEnabled = bool(udp)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// UpsertDownmaskABTarget inserts or updates an AB target.
+func (db *DB) UpsertDownmaskABTarget(t DownmaskABTarget) error {
+	_, err := db.sql.Exec(`INSERT INTO downmask_ab_pull_targets(host, port, token, local_ip, weight, tcp_enabled, udp_enabled)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(host) DO UPDATE SET port=excluded.port, token=excluded.token, local_ip=excluded.local_ip, weight=excluded.weight, tcp_enabled=excluded.tcp_enabled, udp_enabled=excluded.udp_enabled`,
+		t.Host, t.Port, t.Token, t.LocalIP, t.Weight, boolInt(t.TCPEnabled), boolInt(t.UDPEnabled))
+	return err
+}
+
+// DeleteDownmaskABTarget deletes an AB target by host.
+func (db *DB) DeleteDownmaskABTarget(host string) (bool, error) {
+	res, err := db.sql.Exec(`DELETE FROM downmask_ab_pull_targets WHERE host=?`, host)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// ClearDownmaskABTargets deletes all AB targets.
+func (db *DB) ClearDownmaskABTargets() error {
+	_, err := db.sql.Exec(`DELETE FROM downmask_ab_pull_targets`)
+	return err
+}
+
+// DownmaskDayState is persisted automatic pull state for the current day.
+type DownmaskDayState struct {
+	Date                string
+	Iface               string
+	TargetRatio         float64
+	RXAccum             uint64
+	TXAccum             uint64
+	LastRXRaw           uint64
+	LastTXRaw           uint64
+	NextEligibleAt      int64
+	PreviousDate        string
+	PreviousTargetRatio *float64
+	GenerationSource    string
+	GeneratedAt         string
+	LastAction          string
+	LastActualBytes     uint64
+	LastPlannedBytes    uint64
+	LastError           string
+	UpdatedAt           string
+}
+
+// LoadDownmaskDayState loads automatic pull day state.
+func (db *DB) LoadDownmaskDayState() (DownmaskDayState, bool, error) {
+	var s DownmaskDayState
+	var rx, tx, lastRX, lastTX, actual, planned int64
+	var previous sql.NullFloat64
+	err := db.sql.QueryRow(`SELECT date, iface, target_ratio, rx_accum, tx_accum, last_rx_raw, last_tx_raw, next_eligible_at, previous_date, previous_target_ratio, generation_source, generated_at, last_action, last_actual_bytes, last_planned_bytes, last_error, updated_at FROM downmask_day_state WHERE id=1`).
+		Scan(&s.Date, &s.Iface, &s.TargetRatio, &rx, &tx, &lastRX, &lastTX, &s.NextEligibleAt, &s.PreviousDate, &previous, &s.GenerationSource, &s.GeneratedAt, &s.LastAction, &actual, &planned, &s.LastError, &s.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DownmaskDayState{}, false, nil
+	}
+	if err != nil {
+		return DownmaskDayState{}, false, err
+	}
+	s.RXAccum = uint64(rx)
+	s.TXAccum = uint64(tx)
+	s.LastRXRaw = uint64(lastRX)
+	s.LastTXRaw = uint64(lastTX)
+	s.LastActualBytes = uint64(actual)
+	s.LastPlannedBytes = uint64(planned)
+	if previous.Valid {
+		value := previous.Float64
+		s.PreviousTargetRatio = &value
+	}
+	return s, true, nil
+}
+
+// SaveDownmaskDayState stores automatic pull day state.
+func (db *DB) SaveDownmaskDayState(s DownmaskDayState) error {
+	var previous any
+	if s.PreviousTargetRatio != nil {
+		previous = *s.PreviousTargetRatio
+	}
+	_, err := db.sql.Exec(`INSERT INTO downmask_day_state(id, date, iface, target_ratio, rx_accum, tx_accum, last_rx_raw, last_tx_raw, next_eligible_at, previous_date, previous_target_ratio, generation_source, generated_at, last_action, last_actual_bytes, last_planned_bytes, last_error, updated_at)
+		VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET date=excluded.date, iface=excluded.iface, target_ratio=excluded.target_ratio, rx_accum=excluded.rx_accum, tx_accum=excluded.tx_accum,
+			last_rx_raw=excluded.last_rx_raw, last_tx_raw=excluded.last_tx_raw, next_eligible_at=excluded.next_eligible_at, previous_date=excluded.previous_date,
+			previous_target_ratio=excluded.previous_target_ratio, generation_source=excluded.generation_source, generated_at=excluded.generated_at,
+			last_action=excluded.last_action, last_actual_bytes=excluded.last_actual_bytes, last_planned_bytes=excluded.last_planned_bytes, last_error=excluded.last_error, updated_at=excluded.updated_at`,
+		s.Date, s.Iface, s.TargetRatio, int64(s.RXAccum), int64(s.TXAccum), int64(s.LastRXRaw), int64(s.LastTXRaw), s.NextEligibleAt, s.PreviousDate, previous,
+		s.GenerationSource, s.GeneratedAt, s.LastAction, int64(s.LastActualBytes), int64(s.LastPlannedBytes), s.LastError, s.UpdatedAt)
+	return err
+}
+
+// DownmaskRatioHistory records daily target-ratio generation history.
+type DownmaskRatioHistory struct {
+	Date                string
+	TargetRatio         float64
+	PreviousDate        string
+	PreviousTargetRatio *float64
+	GenerationSource    string
+	GeneratedAt         string
+}
+
+// LatestDownmaskRatioHistoryBefore loads the latest history entry before date.
+func (db *DB) LatestDownmaskRatioHistoryBefore(date string) (DownmaskRatioHistory, bool, error) {
+	row := db.sql.QueryRow(`SELECT date, target_ratio, previous_date, previous_target_ratio, generation_source, generated_at FROM downmask_ratio_history WHERE date < ? ORDER BY date DESC LIMIT 1`, date)
+	return scanDownmaskRatioHistory(row)
+}
+
+// DownmaskRatioHistoryForDate loads one history entry by date.
+func (db *DB) DownmaskRatioHistoryForDate(date string) (DownmaskRatioHistory, bool, error) {
+	row := db.sql.QueryRow(`SELECT date, target_ratio, previous_date, previous_target_ratio, generation_source, generated_at FROM downmask_ratio_history WHERE date=?`, date)
+	return scanDownmaskRatioHistory(row)
+}
+
+func scanDownmaskRatioHistory(row *sql.Row) (DownmaskRatioHistory, bool, error) {
+	var h DownmaskRatioHistory
+	var previous sql.NullFloat64
+	err := row.Scan(&h.Date, &h.TargetRatio, &h.PreviousDate, &previous, &h.GenerationSource, &h.GeneratedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DownmaskRatioHistory{}, false, nil
+	}
+	if err != nil {
+		return DownmaskRatioHistory{}, false, err
+	}
+	if previous.Valid {
+		value := previous.Float64
+		h.PreviousTargetRatio = &value
+	}
+	return h, true, nil
+}
+
+// SaveDownmaskRatioHistory stores one history entry and keeps the latest 32 days.
+func (db *DB) SaveDownmaskRatioHistory(h DownmaskRatioHistory) error {
+	var previous any
+	if h.PreviousTargetRatio != nil {
+		previous = *h.PreviousTargetRatio
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO downmask_ratio_history(date, target_ratio, previous_date, previous_target_ratio, generation_source, generated_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(date) DO UPDATE SET target_ratio=excluded.target_ratio, previous_date=excluded.previous_date,
+			previous_target_ratio=excluded.previous_target_ratio, generation_source=excluded.generation_source, generated_at=excluded.generated_at`,
+		h.Date, h.TargetRatio, h.PreviousDate, previous, h.GenerationSource, h.GeneratedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM downmask_ratio_history WHERE date NOT IN (SELECT date FROM downmask_ratio_history ORDER BY date DESC LIMIT 32)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type boolScan bool
