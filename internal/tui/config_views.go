@@ -53,7 +53,7 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新回滚秒数")
 		}), nil
 	case 3:
-		return m.prompt("公开端口", joinInts(m.cfg.Protect.OpenPorts), "逗号分隔端口；留空清空", func(m *model, raw string) error {
+		return m.prompt("公开端口", joinInts(m.cfg.Protect.OpenPorts), "逗号分隔端口或范围；例如 22,443,40000-42000；留空清空", func(m *model, raw string) error {
 			ports, err := parsePortList(raw)
 			if err != nil {
 				return err
@@ -62,7 +62,7 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新公开端口")
 		}), nil
 	case 4:
-		return m.prompt("受保护端口", joinInts(m.cfg.Protect.GuardedPorts), "逗号分隔端口；guard_all=false 时使用", func(m *model, raw string) error {
+		return m.prompt("受保护端口", joinInts(m.cfg.Protect.GuardedPorts), "逗号分隔端口或范围；例如 40000-42000；guard_all=false 时使用", func(m *model, raw string) error {
 			ports, err := parsePortList(raw)
 			if err != nil {
 				return err
@@ -271,7 +271,7 @@ func (m model) updateDPI(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 	case 3:
-		return m.prompt("协议封锁跳过端口", joinInts(m.cfg.Protect.ProtocolSkipPorts), "逗号分隔端口；留空清空", func(m *model, raw string) error {
+		return m.prompt("协议封锁跳过端口", joinInts(m.cfg.Protect.ProtocolSkipPorts), "逗号分隔端口或范围；例如 22,40000-42000；留空清空", func(m *model, raw string) error {
 			ports, err := parsePortList(raw)
 			if err != nil {
 				return err

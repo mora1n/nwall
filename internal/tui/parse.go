@@ -20,18 +20,44 @@ func parsePortList(raw string) ([]int, error) {
 	ports := make([]int, 0, len(values))
 	seen := map[int]struct{}{}
 	for _, value := range values {
-		port, err := parsePort(value)
+		start, end, err := parsePortListItem(value)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[port]; ok {
-			continue
+		for port := start; port <= end; port++ {
+			if _, ok := seen[port]; ok {
+				continue
+			}
+			seen[port] = struct{}{}
+			ports = append(ports, port)
 		}
-		seen[port] = struct{}{}
-		ports = append(ports, port)
 	}
 	sort.Ints(ports)
 	return ports, nil
+}
+
+func parsePortListItem(raw string) (int, int, error) {
+	value := strings.TrimSpace(raw)
+	if strings.Count(value, "-") == 0 {
+		port, err := parsePort(value)
+		return port, port, err
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	start, err := parsePort(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	end, err := parsePort(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	return start, end, nil
 }
 
 func parsePort(raw string) (int, error) {

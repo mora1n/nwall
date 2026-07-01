@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -258,6 +259,46 @@ func TestInputBackspaceRemovesOneRune(t *testing.T) {
 	got := next.(model)
 	if got.input.value != "广" {
 		t.Fatalf("backspace should remove one rune, got %q", got.input.value)
+	}
+}
+
+func TestParsePortListAcceptsRanges(t *testing.T) {
+	got, err := parsePortList("40000-40002,60000-60001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{40000, 40001, 40002, 60000, 60001}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("range parse mismatch: %v", got)
+	}
+}
+
+func TestParsePortListDeduplicatesAndSortsRanges(t *testing.T) {
+	got, err := parsePortList("22,40002,40000-40002,22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{22, 40000, 40001, 40002}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("range dedupe mismatch: %v", got)
+	}
+}
+
+func TestParsePortListAllowsEmptyInput(t *testing.T) {
+	got, err := parsePortList("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty input should clear list: %v", got)
+	}
+}
+
+func TestParsePortListRejectsInvalidRanges(t *testing.T) {
+	for _, raw := range []string{"42000-40000", "0-10", "65535-65536", "abc-def", "1-2-3"} {
+		if _, err := parsePortList(raw); err == nil {
+			t.Fatalf("invalid range should fail: %q", raw)
+		}
 	}
 }
 
