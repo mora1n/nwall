@@ -32,8 +32,8 @@ systemctl enable --now nwall.service
 ```bash
 VERSION=v0.1.0
 curl -LO "https://github.com/mora1n/nwall/releases/download/${VERSION}/nwall-linux-amd64-${VERSION}.tar.gz"
-curl -LO "https://github.com/mora1n/nwall/releases/download/${VERSION}/nwall-linux-amd64-${VERSION}.tar.gz.sha256"
-sha256sum -c "nwall-linux-amd64-${VERSION}.tar.gz.sha256"
+curl -LO "https://github.com/mora1n/nwall/releases/download/${VERSION}/SHA256SUMS"
+sha256sum -c SHA256SUMS
 tar -xzf "nwall-linux-amd64-${VERSION}.tar.gz"
 cd "nwall-linux-amd64-${VERSION}"
 ./install.sh
@@ -198,8 +198,8 @@ nwall update --version v0.1.0
 更新流程：
 
 1. 解析 `latest` 或指定版本
-2. 下载 `nwall-linux-amd64-${VERSION}.tar.gz` 和 `.sha256`
-3. 校验 sha256
+2. 下载 `nwall-linux-amd64-${VERSION}.tar.gz` 和 `SHA256SUMS`
+3. 校验 SHA256
 4. 备份当前二进制和 systemd unit 到临时目录
 5. 原子替换二进制和 unit
 6. 重启 `nwall.service`
@@ -250,7 +250,7 @@ nwall uninstall --purge-config
 | --- | --- |
 | `dist/nwall-linux-amd64-${VERSION}/nwall` | Release 二进制 |
 | `dist/nwall-linux-amd64-${VERSION}.tar.gz` | GitHub Release 压缩包 |
-| `dist/nwall-linux-amd64-${VERSION}.tar.gz.sha256` | Release 校验文件 |
+| `dist/SHA256SUMS` | GitHub Release 校验文件 |
 
 安装后产物：
 
@@ -264,7 +264,7 @@ nwall uninstall --purge-config
 
 ## 发布打包
 
-通过 GitHub 手动创建 Release，上传 tar 包和 sha256 文件：
+通过 GitHub 手动创建 Release，上传 tar 包和 `SHA256SUMS`：
 
 ```bash
 VERSION=v0.1.0 scripts/package.sh
@@ -274,7 +274,7 @@ VERSION=v0.1.0 scripts/package.sh
 
 ```text
 nwall-linux-amd64-${VERSION}.tar.gz
-nwall-linux-amd64-${VERSION}.tar.gz.sha256
+SHA256SUMS
 ```
 
 tar 包内包含：
@@ -296,6 +296,6 @@ go build ./...
 bash -n scripts/install.sh scripts/uninstall.sh scripts/package.sh
 systemd-analyze verify systemd/*.service
 VERSION=v0.1.0 scripts/package.sh
-(cd dist && sha256sum -c nwall-linux-amd64-v0.1.0.tar.gz.sha256)
+(cd dist && sha256sum -c SHA256SUMS)
 tar -tzf dist/nwall-linux-amd64-v0.1.0.tar.gz
 ```

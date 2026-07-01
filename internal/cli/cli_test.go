@@ -238,7 +238,7 @@ func TestUninstallDryRun(t *testing.T) {
 func TestVerifySHA256RejectsMismatch(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "nwall-linux-amd64-v0.1.0.tar.gz")
-	sumFile := archive + ".sha256"
+	sumFile := filepath.Join(dir, checksumsName)
 	if err := os.WriteFile(archive, []byte("payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +248,26 @@ func TestVerifySHA256RejectsMismatch(t *testing.T) {
 	}
 	if err := verifySHA256(archive, sumFile); err == nil {
 		t.Fatal("sha256 mismatch 应返回错误")
+	}
+}
+
+func TestVerifySHA256UsesMatchingAsset(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "nwall-linux-amd64-v0.1.0.tar.gz")
+	sumFile := filepath.Join(dir, checksumsName)
+	payload := []byte("payload")
+	if err := os.WriteFile(archive, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := sha256.Sum256([]byte("other"))
+	good := sha256.Sum256(payload)
+	content := hex.EncodeToString(other[:]) + "  other.tar.gz\n" +
+		hex.EncodeToString(good[:]) + "  " + filepath.Base(archive) + "\n"
+	if err := os.WriteFile(sumFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySHA256(archive, sumFile); err != nil {
+		t.Fatalf("应使用 SHA256SUMS 中匹配当前资产的条目: %v", err)
 	}
 }
 

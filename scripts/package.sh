@@ -19,9 +19,10 @@ fi
 PKG_NAME="nwall-linux-amd64-$VERSION"
 PKG_DIR="$OUT_DIR/$PKG_NAME"
 ARCHIVE="$OUT_DIR/$PKG_NAME.tar.gz"
+CHECKSUMS="$OUT_DIR/SHA256SUMS"
 VERSION_VALUE="${VERSION#v}"
 
-rm -rf "$PKG_DIR" "$ARCHIVE" "$ARCHIVE.sha256"
+rm -rf "$PKG_DIR" "$ARCHIVE" "$ARCHIVE.sha256" "$CHECKSUMS"
 install -d -m 0755 "$PKG_DIR/systemd" "$OUT_DIR"
 
 CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="-s -w -X github.com/mora1n/nwall/internal/version.Version=$VERSION_VALUE" -o "$PKG_DIR/nwall" "$ROOT_DIR/cmd/nwall"
@@ -31,7 +32,7 @@ install -m 0644 "$ROOT_DIR"/systemd/*.service "$PKG_DIR/systemd/"
 install -m 0644 "$ROOT_DIR/README.md" "$PKG_DIR/README.md"
 
 (cd "$OUT_DIR" && tar -czf "$PKG_NAME.tar.gz" "$PKG_NAME")
-(cd "$OUT_DIR" && sha256sum "$PKG_NAME.tar.gz" > "$PKG_NAME.tar.gz.sha256")
+(cd "$OUT_DIR" && sha256sum "$PKG_NAME.tar.gz" > "SHA256SUMS")
 
 printf '%s\n' "$ARCHIVE"
-printf '%s\n' "$ARCHIVE.sha256"
+printf '%s\n' "$CHECKSUMS"

@@ -89,6 +89,26 @@ release_version() {
   curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed 's#.*/##'
 }
 
+verify_release_checksum() {
+  local tmpdir="$1"
+  local asset="$2"
+  local checksums="$tmpdir/SHA256SUMS"
+  local entry="$tmpdir/$asset.sha256"
+  local hash name rest
+
+  while read -r hash name rest; do
+    name="${name#\*}"
+    if [[ "$name" == "$asset" ]]; then
+      printf '%s  %s\n' "$hash" "$asset" > "$entry"
+      (cd "$tmpdir" && sha256sum -c "$asset.sha256")
+      return 0
+    fi
+  done < "$checksums"
+
+  printf 'checksum entry not found for %s in SHA256SUMS\n' "$asset" >&2
+  exit 1
+}
+
 download_release() {
   need_cmd curl
   need_cmd tar
@@ -98,8 +118,8 @@ download_release() {
   local asset="nwall-linux-amd64-$version.tar.gz"
   local base="https://github.com/$REPO/releases/download/$version"
   curl -fsSLo "$tmpdir/$asset" "$base/$asset"
-  curl -fsSLo "$tmpdir/$asset.sha256" "$base/$asset.sha256"
-  (cd "$tmpdir" && sha256sum -c "$asset.sha256")
+  curl -fsSLo "$tmpdir/SHA256SUMS" "$base/SHA256SUMS"
+  verify_release_checksum "$tmpdir" "$asset"
   tar -xzf "$tmpdir/$asset" -C "$tmpdir"
   printf '%s\n' "$tmpdir/nwall-linux-amd64-$version"
 }
@@ -109,8 +129,8 @@ dry_run_remote_install() {
   local asset="nwall-linux-amd64-$version.tar.gz"
   local base="https://github.com/$REPO/releases/download/$version"
   printf 'DRY-RUN: curl -fsSLo %q %q\n' "$asset" "$base/$asset"
-  printf 'DRY-RUN: curl -fsSLo %q %q\n' "$asset.sha256" "$base/$asset.sha256"
-  printf 'DRY-RUN: sha256sum -c %q\n' "$asset.sha256"
+  printf 'DRY-RUN: curl -fsSLo %q %q\n' "SHA256SUMS" "$base/SHA256SUMS"
+  printf 'DRY-RUN: verify %q with SHA256SUMS\n' "$asset"
   printf 'DRY-RUN: tar -xzf %q\n' "$asset"
   run install -d -m 0755 "$PREFIX/bin" "$STATEDIR" "$SYSTEMD_DIR"
   run install -m 0755 "nwall-linux-amd64-$version/nwall" "$PREFIX/bin/nwall"

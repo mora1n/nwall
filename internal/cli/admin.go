@@ -24,6 +24,7 @@ const (
 	defaultStateDir   = "/var/lib/nwall"
 	defaultSystemdDir = "/etc/systemd/system"
 	defaultRepo       = "mora1n/nwall"
+	checksumsName     = "SHA256SUMS"
 )
 
 var managedUnits = []string{
@@ -208,8 +209,8 @@ func dryRunUpdate(opts adminOptions, version string) {
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", opts.Repo, version)
 	fmt.Printf("DRY-RUN: resolve release %s from %s\n", version, opts.Repo)
 	fmt.Printf("DRY-RUN: download %s\n", base+"/"+asset)
-	fmt.Printf("DRY-RUN: download %s\n", base+"/"+asset+".sha256")
-	fmt.Printf("DRY-RUN: verify sha256 for %s\n", asset)
+	fmt.Printf("DRY-RUN: download %s\n", base+"/"+checksumsName)
+	fmt.Printf("DRY-RUN: verify %s with %s\n", asset, checksumsName)
 	fmt.Printf("DRY-RUN: backup %s and systemd units to /tmp/nwall-update-*/backup-*\n", filepath.Join(opts.Prefix, "bin", "nwall"))
 	fmt.Printf("DRY-RUN: atomically replace %s\n", filepath.Join(opts.Prefix, "bin", "nwall"))
 	fmt.Printf("DRY-RUN: atomically replace systemd units in %s\n", opts.SystemdDir)
@@ -239,11 +240,11 @@ func downloadRelease(repo, version, tmpDir string) (string, error) {
 	asset := fmt.Sprintf("nwall-linux-amd64-%s.tar.gz", version)
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, version)
 	archive := filepath.Join(tmpDir, asset)
-	sumFile := archive + ".sha256"
+	sumFile := filepath.Join(tmpDir, checksumsName)
 	if err := downloadFile(archive, base+"/"+asset); err != nil {
 		return "", err
 	}
-	if err := downloadFile(sumFile, base+"/"+asset+".sha256"); err != nil {
+	if err := downloadFile(sumFile, base+"/"+checksumsName); err != nil {
 		return "", err
 	}
 	if err := verifySHA256(archive, sumFile); err != nil {
@@ -282,11 +283,14 @@ func verifySHA256(path, sumFile string) error {
 	if err != nil {
 		return err
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
+	content := strings.TrimSpace(string(data))
+	if content == "" {
 		return fmt.Errorf("sha256 文件为空: %s", sumFile)
 	}
-	want := strings.ToLower(fields[0])
+	want, err := checksumForAsset(content, filepath.Base(path))
+	if err != nil {
+		return err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -301,6 +305,20 @@ func verifySHA256(path, sumFile string) error {
 		return fmt.Errorf("sha256 mismatch: want %s got %s", want, got)
 	}
 	return nil
+}
+
+func checksumForAsset(content, asset string) (string, error) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == asset {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	return "", fmt.Errorf("sha256 entry not found for %s", asset)
 }
 
 func extractTarGz(path, dst string) error {
