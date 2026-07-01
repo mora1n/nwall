@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify source
+        run: |
+          go test ./...
+          go vet ./...
+          go build ./...
+          bash -n scripts/install.sh scripts/uninstall.sh scripts/package.sh
+
+      - name: Build release package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          scripts/package.sh
+          sha256sum -c dist/SHA256SUMS
+          tar -tzf "dist/nwall-linux-amd64-${VERSION}.tar.gz"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            "dist/nwall-linux-amd64-${VERSION}.tar.gz" \
+            "dist/SHA256SUMS" \
+            --verify-tag \
+            --title "$VERSION" \
+            --notes-from-tag
+
