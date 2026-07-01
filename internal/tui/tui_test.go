@@ -385,26 +385,27 @@ func TestVimNavigationKeys(t *testing.T) {
 	}
 }
 
-func TestRepeatScrollRequiresRepeatedKey(t *testing.T) {
+func TestMoveCursorUsesOnlyKeyMessages(t *testing.T) {
 	m := model{mode: viewHome}
 	next, cmd, ok := m.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
 	got := next
-	if !ok || cmd == nil || got.cursor != 1 {
+	if !ok || cmd != nil || got.cursor != 1 {
 		t.Fatalf("first down mismatch cursor=%d ok=%v cmd=%v", got.cursor, ok, cmd)
 	}
-	nextModel, _ := got.updateRepeat(repeatMsg{key: got.repeatKey, seq: got.repeatSeq})
-	got = nextModel.(model)
-	if got.cursor != 1 || got.repeatKey != "" {
-		t.Fatalf("single key should not keep repeating cursor=%d repeat=%q", got.cursor, got.repeatKey)
+	next, cmd, ok = got.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	got = next
+	if !ok || cmd != nil || got.cursor != 2 {
+		t.Fatalf("second down mismatch cursor=%d ok=%v cmd=%v", got.cursor, ok, cmd)
 	}
-	next, _, _ = got.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	next, cmd, ok = got.moveCursor(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, 7)
 	got = next
-	next, _, _ = got.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	if !ok || cmd != nil || got.cursor != 3 {
+		t.Fatalf("j down mismatch cursor=%d ok=%v cmd=%v", got.cursor, ok, cmd)
+	}
+	next, cmd, ok = got.moveCursor(tea.KeyMsg{Type: tea.KeyUp}, 7)
 	got = next
-	nextModel, _ = got.updateRepeat(repeatMsg{key: got.repeatKey, seq: got.repeatSeq})
-	got = nextModel.(model)
-	if got.cursor != 4 {
-		t.Fatalf("repeated key should continue scrolling, cursor=%d", got.cursor)
+	if !ok || cmd != nil || got.cursor != 2 {
+		t.Fatalf("up mismatch cursor=%d ok=%v cmd=%v", got.cursor, ok, cmd)
 	}
 }
 

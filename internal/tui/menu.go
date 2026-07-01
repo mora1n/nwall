@@ -253,25 +253,23 @@ func visibleRange(cursor, total int) (int, int) {
 func (m model) moveCursor(key tea.KeyMsg, total int) (model, tea.Cmd, bool) {
 	if total <= 0 {
 		m.cursor = 0
-		return m.stopRepeat(), nil, false
+		return m, nil, false
 	}
 	switch normalizeMoveKey(key.String()) {
 	case "up":
 		m = m.resetNumberBuffer()
 		if m.cursor > 0 {
 			m.cursor--
-			m, cmd := m.startRepeat("up", repeatInitialDelay)
-			return m, cmd, true
+			return m, nil, true
 		}
-		return m.stopRepeat(), nil, true
+		return m, nil, true
 	case "down":
 		m = m.resetNumberBuffer()
 		if m.cursor < total-1 {
 			m.cursor++
-			m, cmd := m.startRepeat("down", repeatInitialDelay)
-			return m, cmd, true
+			return m, nil, true
 		}
-		return m.stopRepeat(), nil, true
+		return m, nil, true
 	default:
 		return m, nil, false
 	}
@@ -368,10 +366,6 @@ func (m model) resetNumberBuffer() model {
 	return m
 }
 
-func isMoveKey(key string) bool {
-	return normalizeMoveKey(key) != ""
-}
-
 func normalizeMoveKey(key string) string {
 	switch key {
 	case "up", "k":
@@ -381,27 +375,4 @@ func normalizeMoveKey(key string) string {
 	default:
 		return ""
 	}
-}
-
-func (m model) startRepeat(key string, delay time.Duration) (model, tea.Cmd) {
-	if m.repeatKey == key {
-		m.repeatHits++
-	} else {
-		m.repeatHits = 1
-	}
-	m.repeatKey = key
-	m.repeatLast = time.Now()
-	m.repeatSeq++
-	seq := m.repeatSeq
-	return m, tea.Tick(delay, func(time.Time) tea.Msg {
-		return repeatMsg{key: key, seq: seq}
-	})
-}
-
-func (m model) stopRepeat() model {
-	m.repeatKey = ""
-	m.repeatSeq++
-	m.repeatHits = 0
-	m.repeatLast = time.Time{}
-	return m
 }
