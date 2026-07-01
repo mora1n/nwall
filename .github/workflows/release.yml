@@ -37,7 +37,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           scripts/package.sh
-          sha256sum -c dist/SHA256SUMS
+          (cd dist && sha256sum -c SHA256SUMS)
           tar -tzf "dist/nwall-linux-amd64-${VERSION}.tar.gz"
 
       - name: Create GitHub Release
