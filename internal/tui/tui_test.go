@@ -400,6 +400,70 @@ func TestOpenPortListRejectsOverlapsAndClears(t *testing.T) {
 	}
 }
 
+func TestGuardedPortListAddsDeletesAndClears(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Protect.GuardedPorts = nil
+	m := model{db: store, cfg: store.cfg, mode: viewProtect, cursor: 4}
+	next, _ := m.updateProtect(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewGuardedPorts {
+		t.Fatalf("受保护端口应进入列表，mode=%v", got.mode)
+	}
+	assertPortListFlow(t, got, func(m model, key tea.KeyMsg) (tea.Model, tea.Cmd) {
+		return m.updateGuardedPorts(key)
+	}, func() []int {
+		return store.cfg.Protect.GuardedPorts
+	})
+}
+
+func TestDPISkipPortListAddsDeletesAndClears(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Protect.ProtocolSkipPorts = nil
+	m := model{db: store, cfg: store.cfg, mode: viewDPI, cursor: 3}
+	next, _ := m.updateDPI(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewDPISkipPorts {
+		t.Fatalf("跳过端口应进入列表，mode=%v", got.mode)
+	}
+	assertPortListFlow(t, got, func(m model, key tea.KeyMsg) (tea.Model, tea.Cmd) {
+		return m.updateDPISkipPorts(key)
+	}, func() []int {
+		return store.cfg.Protect.ProtocolSkipPorts
+	})
+}
+
+func assertPortListFlow(t *testing.T, m model, update func(model, tea.KeyMsg) (tea.Model, tea.Cmd), ports func() []int) {
+	t.Helper()
+	next, _ := update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "8443,40000-40002,8443"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want := []int{8443, 40000, 40001, 40002}
+	if !reflect.DeepEqual(ports(), want) {
+		t.Fatalf("port add mismatch got=%v want=%v", ports(), want)
+	}
+
+	got.cursor = 2
+	next, _ = update(got, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	got.input.value = "1,3-4"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want = []int{40000}
+	if !reflect.DeepEqual(ports(), want) {
+		t.Fatalf("port delete mismatch got=%v want=%v", ports(), want)
+	}
+	if got.cursor != 0 {
+		t.Fatalf("cursor should stay in range, got %d", got.cursor)
+	}
+
+	next, _ = update(got, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if len(ports()) != 0 {
+		t.Fatalf("port clear mismatch: %v", ports())
+	}
+}
+
 func TestCustomCIDRListAddsEditsAndBatchDeletes(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	m := model{db: store, cfg: store.cfg, mode: viewIngressCustomCIDRs}

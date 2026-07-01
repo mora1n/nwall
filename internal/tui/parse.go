@@ -211,6 +211,16 @@ func joinInts(values []int) string {
 	return strings.Join(parts, ",")
 }
 
+func portListSummary(ports []int) string {
+	if len(ports) == 0 {
+		return "未设置"
+	}
+	if len(ports) <= 6 {
+		return joinInts(ports)
+	}
+	return fmt.Sprintf("%d 项", len(ports))
+}
+
 func portRangesSummary(ranges []conf.PortRange) string {
 	if len(ranges) == 0 {
 		return "未设置"
@@ -321,6 +331,31 @@ func removeStringsByIndex(values []string, indexes map[int]struct{}) []string {
 		}
 		out = append(out, value)
 	}
+	return out
+}
+
+func removeIntsByIndex(values []int, indexes map[int]struct{}) []int {
+	out := make([]int, 0, len(values))
+	for i, value := range values {
+		if _, remove := indexes[i]; remove {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func appendPortsUniqueSorted(values []int, additions ...int) []int {
+	seen := map[int]struct{}{}
+	out := make([]int, 0, len(values)+len(additions))
+	for _, port := range append(append([]int(nil), values...), additions...) {
+		if _, ok := seen[port]; ok {
+			continue
+		}
+		seen[port] = struct{}{}
+		out = append(out, port)
+	}
+	sort.Ints(out)
 	return out
 }
 

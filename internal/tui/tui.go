@@ -46,6 +46,7 @@ const (
 	viewStatus
 	viewProtect
 	viewOpenPorts
+	viewGuardedPorts
 	viewIngress
 	viewIngressCustomCIDRs
 	viewIngressPorts
@@ -53,6 +54,7 @@ const (
 	viewEgressCustomCIDRs
 	viewEgressRegions
 	viewDPI
+	viewDPISkipPorts
 	viewLease
 	viewLeaseRoutes
 	viewLeaseTrigger
@@ -183,6 +185,8 @@ func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateProtect(key)
 	case viewOpenPorts:
 		return m.updateOpenPorts(key)
+	case viewGuardedPorts:
+		return m.updateGuardedPorts(key)
 	case viewIngress:
 		return m.updateIngress(key)
 	case viewIngressCustomCIDRs:
@@ -197,6 +201,8 @@ func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateEgressRegions(key)
 	case viewDPI:
 		return m.updateDPI(key)
+	case viewDPISkipPorts:
+		return m.updateDPISkipPorts(key)
 	case viewLease:
 		return m.updateLease(key)
 	case viewLeaseRoutes:
@@ -242,6 +248,8 @@ func (m model) View() string {
 		return frame(m.viewProtect())
 	case viewOpenPorts:
 		return frame(m.viewOpenPorts())
+	case viewGuardedPorts:
+		return frame(m.viewGuardedPorts())
 	case viewIngress:
 		return frame(m.viewIngress())
 	case viewIngressCustomCIDRs:
@@ -256,6 +264,8 @@ func (m model) View() string {
 		return frame(m.viewEgressRegions())
 	case viewDPI:
 		return frame(m.viewDPI())
+	case viewDPISkipPorts:
+		return frame(m.viewDPISkipPorts())
 	case viewLease:
 		return frame(m.viewLease())
 	case viewLeaseRoutes:

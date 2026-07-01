@@ -58,14 +58,10 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.err = ""
 	case 4:
-		return m.prompt("受保护端口", joinInts(m.cfg.Protect.GuardedPorts), "逗号分隔端口或范围；例如 40000-42000；guard_all=false 时使用", func(m *model, raw string) error {
-			ports, err := parsePortList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Protect.GuardedPorts = ports
-			return m.saveConfig("已更新受保护端口")
-		}), nil
+		m.mode = viewGuardedPorts
+		m.cursor = 0
+		m.status = ""
+		m.err = ""
 	}
 	return m, nil
 }
@@ -76,7 +72,7 @@ func (m model) viewProtect() string {
 		{text: "保护所有端口: " + plainOnOff(m.cfg.Protect.GuardAll), hint: "关闭后只保护 guarded_ports"},
 		{text: fmt.Sprintf("默认回滚: %d 秒", m.cfg.Protect.RollbackTimeoutSec), hint: "e 编辑"},
 		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "进入列表；这些端口不受白名单限制"},
-		{text: "受保护端口: " + joinInts(m.cfg.Protect.GuardedPorts), hint: "e 编辑；guard_all=false 时使用"},
+		{text: "受保护端口: " + portListSummary(m.cfg.Protect.GuardedPorts), hint: "进入列表；guard_all=false 时使用"},
 	}
 	return m.renderRows("防护", rows, "Enter/l 切换/进入 • e 编辑 • h/0/Esc 返回 • q 退出")
 }
@@ -151,6 +147,26 @@ func (m model) viewOpenPorts() string {
 		rows = []row{{text: "暂无公开端口", hint: "按 a 新增"}}
 	}
 	return m.renderRows("防护 / 公开端口", rows, "a 新增 • d 按序号删除 • c 清空 • h/0/Esc 返回")
+}
+
+func (m model) updateGuardedPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.updatePortList(key, portListOptions{
+		ports:       m.cfg.Protect.GuardedPorts,
+		parent:      viewProtect,
+		parentRow:   4,
+		addTitle:    "新增受保护端口",
+		delTitle:    "删除受保护端口",
+		addStatus:   "已新增受保护端口",
+		delStatus:   "已删除受保护端口",
+		clearStatus: "已清空受保护端口",
+		assign: func(m *model, ports []int) {
+			m.cfg.Protect.GuardedPorts = ports
+		},
+	})
+}
+
+func (m model) viewGuardedPorts() string {
+	return m.viewPortList("防护 / 受保护端口", m.cfg.Protect.GuardedPorts, "暂无受保护端口", "受白名单保护", "guard_all=false 时这些端口受保护。")
 }
 
 func (m model) updateIngress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -482,14 +498,10 @@ func (m model) updateDPI(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 	case 3:
-		return m.prompt("协议封锁跳过端口", joinInts(m.cfg.Protect.ProtocolSkipPorts), "逗号分隔端口或范围；例如 22,40000-42000；留空清空", func(m *model, raw string) error {
-			ports, err := parsePortList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Protect.ProtocolSkipPorts = ports
-			return m.saveConfig("已更新协议封锁跳过端口")
-		}), nil
+		m.mode = viewDPISkipPorts
+		m.cursor = 0
+		m.status = ""
+		m.err = ""
 	}
 	return m, nil
 }
@@ -499,9 +511,110 @@ func (m model) viewDPI() string {
 		{text: "HTTP 封锁: " + plainOnOff(m.cfg.Protect.BlockHTTP), hint: "Enter 切换"},
 		{text: "TLS 封锁: " + plainOnOff(m.cfg.Protect.BlockTLS), hint: "Enter 切换"},
 		{text: "SOCKS 封锁: " + plainOnOff(m.cfg.Protect.BlockSOCKS), hint: "Enter 切换"},
-		{text: "跳过端口: " + joinInts(m.cfg.Protect.ProtocolSkipPorts), hint: "e 编辑"},
+		{text: "跳过端口: " + portListSummary(m.cfg.Protect.ProtocolSkipPorts), hint: "进入列表"},
 	}
 	return m.renderRows("协议封锁", rows, "Enter 切换/编辑 • e 编辑 • 0/Esc 返回 • q 退出")
+}
+
+func (m model) updateDPISkipPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.updatePortList(key, portListOptions{
+		ports:       m.cfg.Protect.ProtocolSkipPorts,
+		parent:      viewDPI,
+		parentRow:   3,
+		addTitle:    "新增协议封锁跳过端口",
+		delTitle:    "删除协议封锁跳过端口",
+		addStatus:   "已新增协议封锁跳过端口",
+		delStatus:   "已删除协议封锁跳过端口",
+		clearStatus: "已清空协议封锁跳过端口",
+		assign: func(m *model, ports []int) {
+			m.cfg.Protect.ProtocolSkipPorts = ports
+		},
+	})
+}
+
+func (m model) viewDPISkipPorts() string {
+	return m.viewPortList("协议封锁 / 跳过端口", m.cfg.Protect.ProtocolSkipPorts, "暂无跳过端口", "跳过 DPI", "这些端口不会进入 HTTP/TLS/SOCKS 协议封锁。")
+}
+
+type portListOptions struct {
+	ports       []int
+	parent      viewMode
+	parentRow   int
+	addTitle    string
+	delTitle    string
+	addStatus   string
+	delStatus   string
+	clearStatus string
+	assign      func(*model, []int)
+}
+
+func (m model) updatePortList(key tea.KeyMsg, opts portListOptions) (tea.Model, tea.Cmd) {
+	total := len(opts.ports)
+	if quit, cmd := shouldQuit(key); quit {
+		return m, cmd
+	}
+	if m.backKey(key) {
+		m.mode = opts.parent
+		m.cursor = opts.parentRow
+		return m, nil
+	}
+	switch key.String() {
+	case "a":
+		return m.prompt(opts.addTitle, "", "逗号分隔端口或范围；例如 8443,40000-42000", func(m *model, raw string) error {
+			ports, err := parsePortList(raw)
+			if err != nil {
+				return err
+			}
+			next := appendPortsUniqueSorted(opts.ports, ports...)
+			opts.assign(m, next)
+			return m.saveConfig(opts.addStatus)
+		}), nil
+	case "d":
+		if total == 0 {
+			return m, nil
+		}
+		return m.prompt(opts.delTitle, "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+			indexes, err := parseIndexSelection(raw, len(opts.ports))
+			if err != nil {
+				return err
+			}
+			next := removeIntsByIndex(opts.ports, indexes)
+			opts.assign(m, next)
+			if m.cursor >= len(next) {
+				m.cursor = len(next) - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			return m.saveConfig(opts.delStatus)
+		}), nil
+	case "c":
+		opts.assign(&m, nil)
+		if err := m.saveConfig(opts.clearStatus); err != nil {
+			m.setError(err)
+		}
+		return m, nil
+	default:
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
+		}
+		return m, nil
+	}
+}
+
+func (m model) viewPortList(title string, ports []int, emptyText, hint, detail string) string {
+	rows := make([]row, 0, len(ports))
+	for _, port := range ports {
+		rows = append(rows, row{
+			text:   fmt.Sprint(port),
+			hint:   hint,
+			detail: detail,
+		})
+	}
+	if len(rows) == 0 {
+		rows = []row{{text: emptyText, hint: "按 a 新增"}}
+	}
+	return m.renderRows(title, rows, "a 新增 • d 按序号删除 • c 清空 • h/0/Esc 返回")
 }
 
 func nextCNMode(mode string) string {
