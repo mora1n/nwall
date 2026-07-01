@@ -13,16 +13,18 @@ func (m model) updateDownmask(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 4); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) {
+	if !m.isEnterOrNumber(key) {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 4)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 4)
 	if !ok {
 		return m, nil
 	}
@@ -44,19 +46,19 @@ func (m model) updateDownmask(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) viewDownmask() string {
 	rows := []row{
-		{text: "服务端", hint: joinNonEmpty(m.downmaskConfig.TCPAddr, m.downmaskConfig.UDPAddr, "key="+secretState(m.downmaskConfig.Token))},
+		{text: "服务端", hint: joinNonEmpty(m.downmaskConfig.TCPAddr, m.downmaskConfig.UDPAddr, "key="+valueOrDash(m.downmaskConfig.Token))},
 		{text: "自动拉取", hint: fmt.Sprintf("mode=%s iface=%s targets=%d", m.downmaskPolicy.PullMode, valueOrDash(m.downmaskPolicy.Iface), len(m.downmaskTargets))},
 		{text: "目标", hint: countSummary(len(m.downmaskTargets))},
 		{text: "状态", hint: m.downmaskStatusSummary()},
 	}
-	return m.renderRows("下行伪装", rows, "Enter/序号 进入 • 0/Esc 返回 • q 退出")
+	return m.renderRows("下行伪装", rows, "Enter 进入当前项 • 输入序号后 Enter • 0/Esc 返回 • q 退出")
 }
 
 func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewDownmask
 		m.cursor = 0
 		return m, nil
@@ -64,11 +66,14 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if moved, ok := m.moveCursor(key, 6); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 6)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 6)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -133,7 +138,7 @@ func (m model) viewDownmaskServer() string {
 	rows := []row{
 		{text: "TCP: " + valueOrDash(m.downmaskConfig.TCPAddr), hint: "e 编辑"},
 		{text: "UDP: " + valueOrDash(m.downmaskConfig.UDPAddr), hint: "e 编辑"},
-		{text: "共享 key: " + secretState(m.downmaskConfig.Token), hint: "e 设置新 key"},
+		{text: "共享 key: " + valueOrDash(m.downmaskConfig.Token), hint: "e 设置新 key"},
 		{text: "seed 路径: " + m.downmaskConfig.SeedPath, hint: "e 编辑"},
 		{text: fmt.Sprintf("最大速率: %d", m.downmaskConfig.MaxRate), hint: "e 编辑"},
 		{text: fmt.Sprintf("UDP payload: %d", m.downmaskConfig.UDPPayloadBytes), hint: "e 编辑"},
@@ -145,7 +150,7 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewDownmask
 		m.cursor = 1
 		return m, nil
@@ -153,11 +158,14 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if moved, ok := m.moveCursor(key, 14); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 14)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 14)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -297,7 +305,7 @@ func (m model) viewDownmaskClient() string {
 		{text: "协议模式: " + m.downmaskAB.ProtocolMode, hint: "Enter 切换 single/parallel"},
 		{text: fmt.Sprintf("默认远端端口: %d", m.downmaskAB.RemotePort), hint: "e 编辑"},
 		{text: "默认本地源 IP: " + valueOrDash(m.downmaskAB.LocalIP), hint: "e 编辑"},
-		{text: "默认 key: " + secretState(m.downmaskAB.Token), hint: "e 设置新 key"},
+		{text: "默认 key: " + valueOrDash(m.downmaskAB.Token), hint: "e 设置新 key"},
 		{text: "限速: " + valueOrDash(m.downmaskAB.SpeedLimit), hint: "e 编辑"},
 		{text: fmt.Sprintf("超时/并行/抖动: %ds %d %d%% %d%%", m.downmaskAB.TimeoutSeconds, m.downmaskAB.ParallelLimit, m.downmaskAB.SpeedJitterPercent, m.downmaskAB.BytesJitterPercent), hint: "e 编辑"},
 	}
@@ -309,7 +317,7 @@ func (m model) updateDownmaskTargets(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewDownmask
 		m.cursor = 2
 		return m, nil
@@ -377,7 +385,7 @@ func (m model) viewDownmaskTargets() string {
 	for _, target := range m.downmaskTargets {
 		rows = append(rows, row{
 			text: fmt.Sprintf("%s  port=%d weight=%d tcp=%v udp=%v", target.Host, target.Port, target.Weight, target.TCPEnabled, target.UDPEnabled),
-			hint: joinNonEmpty(target.LocalIP, "key="+secretState(target.Token)),
+			hint: joinNonEmpty(target.LocalIP, "key="+valueOrDash(target.Token)),
 		})
 	}
 	if len(rows) == 0 {
@@ -390,7 +398,7 @@ func (m model) updateDownmaskStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewDownmask
 		m.cursor = 3
 		return m, nil

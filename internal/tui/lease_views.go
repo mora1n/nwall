@@ -13,17 +13,20 @@ func (m model) updateLease(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 7); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 7)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 7)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -87,7 +90,7 @@ func (m model) updateLease(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) viewLease() string {
 	rows := []row{
 		{text: "监听: " + formatListen(m.cfg.Lease.ListenHost, m.cfg.Lease.ListenPort), hint: "e 编辑"},
-		{text: "共享 key: " + secretState(m.cfg.Lease.LeaseKey), hint: "e 设置新 key"},
+		{text: "共享 key: " + valueOrDash(m.cfg.Lease.LeaseKey), hint: "e 设置新 key"},
 		{text: "默认租约时长: " + m.cfg.Lease.IdleTTL, hint: "e 编辑"},
 		{text: fmt.Sprintf("签名时间窗: %d 秒", m.cfg.Lease.TSWindowSec), hint: "e 编辑"},
 		{text: "可信 relay: " + countSummary(len(m.cfg.Lease.TrustedRelayCIDRs)), hint: "e 编辑"},
@@ -102,7 +105,7 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewLease
 		m.cursor = 5
 		return m, nil
@@ -170,7 +173,7 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewLease
 		m.cursor = 0
 		return m, nil
@@ -178,11 +181,14 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if moved, ok := m.moveCursor(key, 3); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 3)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 3)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -229,7 +235,7 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		m.mode = viewLeaseTrigger
 		m.cursor = 2
 		return m, nil
@@ -283,7 +289,7 @@ func (m model) viewLeaseTriggerRoutes() string {
 	rows := make([]row, 0, len(m.cfg.LeaseTrigger.Routes))
 	for _, route := range m.cfg.LeaseTrigger.Routes {
 		rows = append(rows, row{
-			text: fmt.Sprintf("%s  %s -> %s", secretState(route.Token), route.Label, route.Target),
+			text: fmt.Sprintf("%s  %s -> %s", valueOrDash(route.Token), route.Label, route.Target),
 			hint: fmt.Sprintf("ttl=%s v4/%d v6/%d", valueOr(route.IdleTTL, m.cfg.Lease.IdleTTL), routeV4Len(route.IPv4PrefixLen), routeV6Len(route.IPv6PrefixLen)),
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -61,9 +62,14 @@ const (
 	viewRegions
 	viewProvince
 	viewInput
+	viewConfirm
+	viewPortPolicyMode
+	viewPortPolicyRegions
+	viewPortPolicyProvince
 )
 
 const visibleRows = 18
+const numberBufferTTL = 700 * time.Millisecond
 
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
@@ -81,6 +87,21 @@ type inputState struct {
 	value    string
 	previous viewMode
 	submit   func(*model, string) error
+}
+
+type confirmState struct {
+	title    string
+	message  string
+	help     string
+	previous viewMode
+	confirm  func(*model) error
+}
+
+type portPolicyDraft struct {
+	active bool
+	edit   bool
+	old    int
+	policy conf.PortPolicy
 }
 
 type model struct {
@@ -106,6 +127,10 @@ type model struct {
 	province   string
 	regionBack viewMode
 	input      inputState
+	confirm    confirmState
+	portDraft  portPolicyDraft
+	numBuf     string
+	numAt      time.Time
 	status     string
 	err        string
 }
@@ -173,6 +198,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateProvince(key)
 	case viewInput:
 		return m.updateInput(key)
+	case viewConfirm:
+		return m.updateConfirm(key)
+	case viewPortPolicyMode:
+		return m.updatePortPolicyMode(key)
+	case viewPortPolicyRegions:
+		return m.updatePortPolicyRegions(key)
+	case viewPortPolicyProvince:
+		return m.updatePortPolicyProvince(key)
 	default:
 		return m, nil
 	}
@@ -218,6 +251,14 @@ func (m model) View() string {
 		return frame(m.viewProvince())
 	case viewInput:
 		return frame(m.viewInput())
+	case viewConfirm:
+		return frame(m.viewConfirm())
+	case viewPortPolicyMode:
+		return frame(m.viewPortPolicyMode())
+	case viewPortPolicyRegions:
+		return frame(m.viewPortPolicyRegions())
+	case viewPortPolicyProvince:
+		return frame(m.viewPortPolicyProvince())
 	default:
 		return frame(m.viewHome())
 	}
@@ -352,7 +393,7 @@ func (m model) prompt(title, value, help string, submit func(*model, string) err
 	m.mode = viewInput
 	m.err = ""
 	m.status = ""
-	return m
+	return m.resetNumberBuffer()
 }
 
 func (m model) updateInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -372,8 +413,9 @@ func (m model) updateInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		m.mode = previous
-		m.input = inputState{}
+		if m.mode == viewInput {
+			m.mode = previous
+		}
 	case "backspace", "ctrl+h":
 		m.input.value = trimLastRune(m.input.value)
 	default:
@@ -422,13 +464,6 @@ func mark(v bool) string {
 		return "✓"
 	}
 	return " "
-}
-
-func secretState(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "未设置"
-	}
-	return "已设置"
 }
 
 func valueOrDash(value string) string {

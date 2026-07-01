@@ -130,6 +130,40 @@ func TestRegionNumberZeroReturnsHome(t *testing.T) {
 	}
 }
 
+func TestRegionMultiDigitNumberSelectsProvince(t *testing.T) {
+	gdb, err := geo.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provs := gdb.Provinces()
+	if len(provs) < 11 {
+		t.Fatalf("省份数量不足以测试多位序号: %d", len(provs))
+	}
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, geo: gdb, mode: viewRegions}
+	next, _ := m.updateRegions(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got := next.(model)
+	if got.mode != viewRegions {
+		t.Fatalf("输入首位 1 不应立即进入省份，mode=%v", got.mode)
+	}
+	next, _ = got.updateRegions(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got = next.(model)
+	if got.mode != viewProvince || got.province != provs[10] {
+		t.Fatalf("输入 11 应进入第 11 个省份: mode=%v province=%q want=%q", got.mode, got.province, provs[10])
+	}
+}
+
+func TestRepeatedDownMovesCursor(t *testing.T) {
+	m := model{mode: viewHome}
+	for range 3 {
+		next, _ := m.updateHome(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(model)
+	}
+	if m.cursor != 3 {
+		t.Fatalf("重复 down 应连续移动 cursor，got=%d", m.cursor)
+	}
+}
+
 func TestHomeIncludesExpectedGroups(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	m := model{db: store, cfg: store.cfg}
@@ -148,6 +182,11 @@ func TestApplyAndReloadActionsSurfaceState(t *testing.T) {
 	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus}
 	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
+	if got.mode != viewConfirm || actions.applyCalls != 0 {
+		t.Fatalf("apply should wait for confirmation mode=%v calls=%d", got.mode, actions.applyCalls)
+	}
+	next, _ = got.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	got = next.(model)
 	if actions.applyCalls != 1 || got.err != "" || !strings.Contains(got.status, "已应用规则") {
 		t.Fatalf("apply state mismatch calls=%d status=%q err=%q", actions.applyCalls, got.status, got.err)
 	}
@@ -181,8 +220,23 @@ func TestApplyActionSurfacesError(t *testing.T) {
 	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus}
 	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
+	next, _ = got.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	got = next.(model)
 	if got.err != "apply failed" {
 		t.Fatalf("expected apply error, got status=%q err=%q", got.status, got.err)
+	}
+}
+
+func TestApplyConfirmationCanCancel(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	actions := &fakeActions{}
+	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus}
+	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	next, _ = got.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	got = next.(model)
+	if actions.applyCalls != 0 || got.mode != viewStatus || !strings.Contains(got.status, "已取消") {
+		t.Fatalf("cancel mismatch calls=%d mode=%v status=%q", actions.applyCalls, got.mode, got.status)
 	}
 }
 
@@ -229,4 +283,81 @@ func TestParsePortPolicyAcceptsCityCodes(t *testing.T) {
 	if len(policy.CNCityCodes) != 1 || policy.CNCityCodes[0] != cities[0].Code {
 		t.Fatalf("city code mismatch: %+v", policy.CNCityCodes)
 	}
+}
+
+func TestKeysAreVisibleInTUI(t *testing.T) {
+	fs := &fakeStore{cfg: conf.Default()}
+	fs.cfg.Lease.LeaseKey = "lease-secret"
+	fs.cfg.LeaseTrigger.Routes = []conf.TriggerRoute{{Token: "trigger-token", Label: "office", Target: "198.51.100.7:19082"}}
+	fs.dmCfg.Token = "mask-server-key"
+	fs.ab.Token = "mask-client-key"
+	fs.targets = []store.DownmaskABTarget{{Host: "198.51.100.9", Port: 15301, Weight: 1, TCPEnabled: true, Token: "target-key"}}
+	m := model{db: fs, cfg: fs.cfg, downmaskConfig: fs.dmCfg, downmaskAB: fs.ab, downmaskTargets: fs.targets}
+	if !strings.Contains(m.viewLease(), "lease-secret") {
+		t.Fatal("lease key should be visible")
+	}
+	if !strings.Contains(m.viewLeaseTriggerRoutes(), "trigger-token") {
+		t.Fatal("trigger token should be visible")
+	}
+	for _, want := range []string{"mask-server-key", "mask-client-key", "target-key"} {
+		views := m.viewDownmask() + m.viewDownmaskServer() + m.viewDownmaskClient() + m.viewDownmaskTargets()
+		if !strings.Contains(views, want) {
+			t.Fatalf("downmask key should be visible: %q", want)
+		}
+	}
+}
+
+func TestPortPolicyWizardSavesOffMode(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, geo: mustGeo(t), mode: viewIngressPorts}
+	next, _ := m.updateIngressPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "8443"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.mode != viewPortPolicyMode {
+		t.Fatalf("输入端口后应进入模式选择，mode=%v", got.mode)
+	}
+	next, _ = got.updatePortPolicyMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got = next.(model)
+	if len(store.cfg.Ingress.PortPolicies) != 1 || store.cfg.Ingress.PortPolicies[0].ListenPort != 8443 || store.cfg.Ingress.PortPolicies[0].CNMode != "off" {
+		t.Fatalf("off port policy not saved: %+v", store.cfg.Ingress.PortPolicies)
+	}
+}
+
+func TestPortPolicyWizardSelectsProvince(t *testing.T) {
+	gdb := mustGeo(t)
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, geo: gdb, mode: viewIngressPorts}
+	next, _ := m.updateIngressPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "8443"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	next, _ = got.updatePortPolicyMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	got = next.(model)
+	got.province = "广东省"
+	got.mode = viewPortPolicyProvince
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got = next.(model)
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	got = next.(model)
+	if len(store.cfg.Ingress.PortPolicies) != 1 {
+		t.Fatalf("policy missing: %+v", store.cfg.Ingress.PortPolicies)
+	}
+	policy := store.cfg.Ingress.PortPolicies[0]
+	if policy.CNMode != "provinces" || len(policy.CNProvinces) != 1 || policy.CNProvinces[0] != "广东省" {
+		t.Fatalf("province policy mismatch: %+v", policy)
+	}
+}
+
+func mustGeo(t *testing.T) *geo.DB {
+	t.Helper()
+	gdb, err := geo.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gdb
 }

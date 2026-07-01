@@ -13,17 +13,20 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 5); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 5)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 5)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -86,17 +89,20 @@ func (m model) updateIngress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 6); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 6)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 6)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -160,17 +166,20 @@ func (m model) updateEgress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 5); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 5)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 5)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
@@ -226,17 +235,20 @@ func (m model) updateDPI(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if backKey(key) {
+	if m.backKey(key) {
 		return m.goHome(), nil
 	}
 	if moved, ok := m.moveCursor(key, 4); ok {
 		return moved, nil
 	}
-	if !isEnterOrNumber(key) && key.String() != "e" {
+	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
-	idx, ok := chosenIndex(key, m.cursor, 4)
+	var idx int
+	var ok bool
+	m, idx, ok = m.handleChoice(key, 4)
 	if key.String() == "e" {
+		m = m.resetNumberBuffer()
 		idx, ok = m.cursor, true
 	}
 	if !ok {
