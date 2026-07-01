@@ -95,7 +95,7 @@ func uninstall(opts adminOptions) error {
 	if opts.ConfigMode == "" {
 		opts.ConfigMode = "ask"
 	}
-	disableArgs := append([]string{"disable", "--now"}, allKnownUnits()...)
+	disableArgs := append([]string{"disable", "--now"}, managedUnits...)
 	if err := systemctl(opts.DryRun, disableArgs...); err != nil {
 		fmt.Fprintf(os.Stderr, "停止服务失败（继续卸载）: %v\n", err)
 	}
@@ -108,7 +108,7 @@ func uninstall(opts adminOptions) error {
 	if err := remove(opts.DryRun, binPath); err != nil {
 		return err
 	}
-	for _, unit := range allKnownUnits() {
+	for _, unit := range managedUnits {
 		if err := remove(opts.DryRun, filepath.Join(opts.SystemdDir, unit)); err != nil {
 			return err
 		}

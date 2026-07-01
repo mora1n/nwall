@@ -228,9 +228,14 @@ func TestUninstallDryRun(t *testing.T) {
 		t.Fatalf("uninstall dry-run: %v", err)
 	}
 	got := stdout()
-	for _, want := range []string{"DRY-RUN: nwall protect disable", "DRY-RUN: rm -f", "保留配置 DB", "保留状态目录"} {
+	for _, want := range []string{"DRY-RUN: systemctl disable --now nwall.service", "DRY-RUN: nwall protect disable", "DRY-RUN: rm -f", "保留配置 DB", "保留状态目录"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, got)
+		}
+	}
+	for _, legacy := range legacyUnits {
+		if strings.Contains(got, legacy) {
+			t.Fatalf("uninstall dry-run should not touch legacy unit %q:\n%s", legacy, got)
 		}
 	}
 }
