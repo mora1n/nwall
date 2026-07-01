@@ -116,6 +116,56 @@ func parseUint64(raw, name string) (uint64, error) {
 	return value, nil
 }
 
+func parseByteRate(raw, name string) (uint64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s 不能为空", name)
+	}
+	lower := strings.ToLower(value)
+	lower = strings.TrimSuffix(lower, "/s")
+	units := []struct {
+		suffix string
+		scale  uint64
+	}{
+		{suffix: "gb", scale: 1_000_000_000},
+		{suffix: "mb", scale: 1_000_000},
+		{suffix: "kb", scale: 1_000},
+	}
+	for _, unit := range units {
+		if strings.HasSuffix(lower, unit.suffix) {
+			number := strings.TrimSpace(strings.TrimSuffix(lower, unit.suffix))
+			parsed, err := strconv.ParseFloat(number, 64)
+			if err != nil || parsed < 0 {
+				return 0, fmt.Errorf("%s 无效: %s", name, raw)
+			}
+			if parsed > float64(math.MaxUint64)/float64(unit.scale) {
+				return 0, fmt.Errorf("%s 超出范围", name)
+			}
+			return uint64(parsed * float64(unit.scale)), nil
+		}
+	}
+	return parseUint64(lower, name)
+}
+
+func formatByteRate(value uint64) string {
+	if value == 0 {
+		return "0"
+	}
+	for _, unit := range []struct {
+		suffix string
+		scale  uint64
+	}{
+		{suffix: "GB/s", scale: 1_000_000_000},
+		{suffix: "MB/s", scale: 1_000_000},
+		{suffix: "KB/s", scale: 1_000},
+	} {
+		if value >= unit.scale && value%unit.scale == 0 {
+			return fmt.Sprintf("%d%s", value/unit.scale, unit.suffix)
+		}
+	}
+	return fmt.Sprintf("%d bytes/s", value)
+}
+
 func parseCIDRList(raw string) ([]string, error) {
 	values := splitCSV(raw)
 	out := make([]string, 0, len(values))

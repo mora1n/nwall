@@ -71,8 +71,8 @@ func (m model) viewProtect() string {
 		{text: "防护: " + plainOnOff(m.cfg.Protect.Enabled), hint: "总开关"},
 		{text: "保护所有端口: " + plainOnOff(m.cfg.Protect.GuardAll), hint: "关闭后只保护 guarded_ports"},
 		{text: fmt.Sprintf("默认回滚: %d 秒", m.cfg.Protect.RollbackTimeoutSec), hint: "e 编辑"},
-		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "进入列表；这些端口不受白名单限制"},
-		{text: "受保护端口: " + portListSummary(m.cfg.Protect.GuardedPorts), hint: "进入列表；guard_all=false 时使用"},
+		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "直接公开放行，不受白名单限制"},
+		{text: "受保护端口: " + portListSummary(m.cfg.Protect.GuardedPorts), hint: "guard_all=false 时只保护这些端口"},
 	}
 	return m.renderRows("防护", rows, "Enter/l 切换/进入 • e 编辑 • h/0/Esc 返回 • q 退出")
 }
@@ -107,7 +107,7 @@ func (m model) updateOpenPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if total == 0 {
 			return m, nil
 		}
-		return m.prompt("删除公开端口", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+		return m.prompt("删除公开端口", fmt.Sprint(m.cursor+1), "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
 			indexes, err := parseIndexSelection(raw, len(m.cfg.Protect.OpenPortRanges))
 			if err != nil {
 				return err
@@ -233,8 +233,8 @@ func (m model) viewIngress() string {
 		{text: "入站白名单: " + plainOnOff(m.cfg.Ingress.Enabled), hint: "总开关"},
 		{text: "CN 模式: " + m.cfg.Ingress.CNMode, hint: "Enter 循环 off/all/provinces"},
 		{text: "省市选择: " + m.regionSummary(), hint: "进入省/市树"},
-		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Ingress.CustomCIDRs)), hint: "进入列表"},
-		{text: "端口覆盖策略: " + countSummary(len(m.cfg.Ingress.PortPolicies)), hint: "进入列表"},
+		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Ingress.CustomCIDRs)), hint: "加入入站来源白名单"},
+		{text: "端口覆盖策略: " + countSummary(len(m.cfg.Ingress.PortPolicies)), hint: "为指定端口单独配置地区白名单"},
 		{text: "清空省市选择", hint: "只清空全局省份/城市"},
 	}
 	return m.renderRows("入站", rows, "Enter 执行/进入 • e 编辑 • 0/Esc 返回 • q 退出")
@@ -283,7 +283,7 @@ func (m model) updateIngressCustomCIDRs(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if total == 0 {
 			return m, nil
 		}
-		return m.prompt("删除入站自定义 CIDR", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+		return m.prompt("删除入站自定义 CIDR", fmt.Sprint(m.cursor+1), "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
 			indexes, err := parseIndexSelection(raw, len(m.cfg.Ingress.CustomCIDRs))
 			if err != nil {
 				return err
@@ -369,7 +369,7 @@ func (m model) viewEgress() string {
 		{text: "出站白名单: " + plainOnOff(m.cfg.Egress.Enabled), hint: "总开关"},
 		{text: "CN 模式: " + m.cfg.Egress.CNMode, hint: "Enter 循环 off/all/provinces"},
 		{text: "省份选择: " + countSummary(len(m.cfg.Egress.CNProvinces)), hint: "进入省份树"},
-		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Egress.CustomCIDRs)), hint: "进入列表"},
+		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Egress.CustomCIDRs)), hint: "加入出站目标允许范围"},
 		{text: "清空省份选择", hint: "只清空出站省份"},
 	}
 	return m.renderRows("出站", rows, "Enter 执行/进入 • e 编辑 • 0/Esc 返回 • q 退出")
@@ -418,7 +418,7 @@ func (m model) updateEgressCustomCIDRs(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if total == 0 {
 			return m, nil
 		}
-		return m.prompt("删除出站自定义 CIDR", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+		return m.prompt("删除出站自定义 CIDR", fmt.Sprint(m.cursor+1), "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
 			indexes, err := parseIndexSelection(raw, len(m.cfg.Egress.CustomCIDRs))
 			if err != nil {
 				return err
@@ -511,7 +511,7 @@ func (m model) viewDPI() string {
 		{text: "HTTP 封锁: " + plainOnOff(m.cfg.Protect.BlockHTTP), hint: "Enter 切换"},
 		{text: "TLS 封锁: " + plainOnOff(m.cfg.Protect.BlockTLS), hint: "Enter 切换"},
 		{text: "SOCKS 封锁: " + plainOnOff(m.cfg.Protect.BlockSOCKS), hint: "Enter 切换"},
-		{text: "跳过端口: " + portListSummary(m.cfg.Protect.ProtocolSkipPorts), hint: "进入列表"},
+		{text: "跳过端口: " + portListSummary(m.cfg.Protect.ProtocolSkipPorts), hint: "这些端口跳过协议封锁"},
 	}
 	return m.renderRows("协议封锁", rows, "Enter 切换/编辑 • e 编辑 • 0/Esc 返回 • q 退出")
 }
@@ -573,7 +573,7 @@ func (m model) updatePortList(key tea.KeyMsg, opts portListOptions) (tea.Model, 
 		if total == 0 {
 			return m, nil
 		}
-		return m.prompt(opts.delTitle, "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+		return m.prompt(opts.delTitle, fmt.Sprint(m.cursor+1), "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
 			indexes, err := parseIndexSelection(raw, len(opts.ports))
 			if err != nil {
 				return err

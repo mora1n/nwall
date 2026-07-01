@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -97,9 +99,14 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskConfig("已更新 UDP 监听")
 		}), nil
 	case 2:
-		return m.prompt("下行伪装共享 key", "", "输入新 key；不会回显当前值", func(m *model, raw string) error {
+		return m.prompt("下行伪装共享 key", "", "输入新 key；留空回车自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
 			if strings.TrimSpace(raw) == "" {
-				return fmt.Errorf("downmask key 不能为空")
+				key, err := generateDownmaskKey()
+				if err != nil {
+					return err
+				}
+				m.downmaskConfig.Token = key
+				return m.saveDownmaskConfig("已生成并保存下行伪装 key: " + key)
 			}
 			m.downmaskConfig.Token = raw
 			return m.saveDownmaskConfig("已更新下行伪装 key")
@@ -113,8 +120,8 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskConfig("已更新 seed 路径")
 		}), nil
 	case 4:
-		return m.prompt("服务端最大速率", fmt.Sprint(m.downmaskConfig.MaxRate), "bytes/s；0 表示不限", func(m *model, raw string) error {
-			value, err := parseUint64(raw, "max_rate")
+		return m.prompt("服务端最大速率", formatByteRate(m.downmaskConfig.MaxRate), "服务端发送限速；0 不限；支持 bytes/s、10MB、1GB", func(m *model, raw string) error {
+			value, err := parseByteRate(raw, "max_rate")
 			if err != nil {
 				return err
 			}
@@ -122,7 +129,7 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskConfig("已更新服务端最大速率")
 		}), nil
 	case 5:
-		return m.prompt("UDP payload 字节", fmt.Sprint(m.downmaskConfig.UDPPayloadBytes), "范围 17-65507", func(m *model, raw string) error {
+		return m.prompt("UDP payload 字节", fmt.Sprint(m.downmaskConfig.UDPPayloadBytes), "UDP 单包数据载荷字节；常用 1200，过大可能分片；范围 17-65507", func(m *model, raw string) error {
 			value, err := parseIntRange(raw, "udp_payload_bytes", 17, 65507)
 			if err != nil {
 				return err
@@ -136,12 +143,12 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) viewDownmaskServer() string {
 	rows := []row{
-		{text: "TCP: " + valueOrDash(m.downmaskConfig.TCPAddr), hint: "e 编辑"},
-		{text: "UDP: " + valueOrDash(m.downmaskConfig.UDPAddr), hint: "e 编辑"},
-		{text: "共享 key: " + valueOrDash(m.downmaskConfig.Token), hint: "e 设置新 key"},
-		{text: "seed 路径: " + m.downmaskConfig.SeedPath, hint: "e 编辑"},
-		{text: fmt.Sprintf("最大速率: %d", m.downmaskConfig.MaxRate), hint: "e 编辑"},
-		{text: fmt.Sprintf("UDP payload: %d", m.downmaskConfig.UDPPayloadBytes), hint: "e 编辑"},
+		{text: "TCP: " + valueOrDash(m.downmaskConfig.TCPAddr), hint: "TCP 客户端拉取伪装流量的监听地址"},
+		{text: "UDP: " + valueOrDash(m.downmaskConfig.UDPAddr), hint: "UDP 客户端租用 payload 拉取伪装流量"},
+		{text: "共享 key: " + valueOrDash(m.downmaskConfig.Token), hint: "客户端和服务端鉴权；留空自动生成"},
+		{text: "seed 路径: " + m.downmaskConfig.SeedPath, hint: "伪装数据源路径，DB 只保存路径"},
+		{text: "最大速率: " + formatByteRate(m.downmaskConfig.MaxRate), hint: "服务端发送限速，0 表示不限"},
+		{text: fmt.Sprintf("UDP payload: %d", m.downmaskConfig.UDPPayloadBytes), hint: "UDP 单包数据载荷大小，影响分片和包数"},
 	}
 	return m.renderRows("下行伪装 / 服务端", rows, "Enter/e 编辑 • 0/Esc 返回 • q 退出")
 }
@@ -261,9 +268,14 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskAB("已更新默认本地源 IP")
 		}), nil
 	case 11:
-		return m.prompt("默认下行伪装 key", "", "输入新 key；不会回显当前值", func(m *model, raw string) error {
+		return m.prompt("默认下行伪装 key", "", "输入新 key；留空回车自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
 			if strings.TrimSpace(raw) == "" {
-				return fmt.Errorf("downmask key 不能为空")
+				key, err := generateDownmaskKey()
+				if err != nil {
+					return err
+				}
+				m.downmaskAB.Token = key
+				return m.saveDownmaskAB("已生成并保存默认下行伪装 key: " + key)
 			}
 			m.downmaskAB.Token = raw
 			return m.saveDownmaskAB("已更新默认下行伪装 key")
@@ -294,22 +306,30 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) viewDownmaskClient() string {
 	rows := []row{
-		{text: "自动拉取: " + m.downmaskPolicy.PullMode, hint: "Enter 切换 off/ab"},
-		{text: "统计网卡: " + valueOrDash(m.downmaskPolicy.Iface), hint: "e 编辑"},
-		{text: fmt.Sprintf("每日比例: %.4f - %.4f", m.downmaskPolicy.MinRatio, m.downmaskPolicy.MaxRatio), hint: "e 编辑"},
-		{text: "时间窗口: " + joinNonEmpty(m.downmaskPolicy.TimeWindowStart, m.downmaskPolicy.TimeWindowEnd), hint: "e 编辑"},
-		{text: fmt.Sprintf("最大随机等待: %d 秒", m.downmaskPolicy.MaxJitterSeconds), hint: "e 编辑"},
-		{text: fmt.Sprintf("最小缺口: %d bytes", m.downmaskPolicy.MinDeficitBytes), hint: "e 编辑"},
-		{text: fmt.Sprintf("单次最大拉取: %d bytes", m.downmaskPolicy.MaxBytesPerRun), hint: "e 编辑"},
-		{text: "协议: " + m.downmaskAB.Protocol, hint: "Enter 切换 tcp/udp"},
-		{text: "协议模式: " + m.downmaskAB.ProtocolMode, hint: "Enter 切换 single/parallel"},
-		{text: fmt.Sprintf("默认远端端口: %d", m.downmaskAB.RemotePort), hint: "e 编辑"},
-		{text: "默认本地源 IP: " + valueOrDash(m.downmaskAB.LocalIP), hint: "e 编辑"},
-		{text: "默认 key: " + valueOrDash(m.downmaskAB.Token), hint: "e 设置新 key"},
-		{text: "限速: " + valueOrDash(m.downmaskAB.SpeedLimit), hint: "e 编辑"},
-		{text: fmt.Sprintf("超时/并行/抖动: %ds %d %d%% %d%%", m.downmaskAB.TimeoutSeconds, m.downmaskAB.ParallelLimit, m.downmaskAB.SpeedJitterPercent, m.downmaskAB.BytesJitterPercent), hint: "e 编辑"},
+		{text: "自动拉取: " + m.downmaskPolicy.PullMode, hint: "Enter 切换是否按下行缺口自动补流量"},
+		{text: "统计网卡: " + valueOrDash(m.downmaskPolicy.Iface), hint: "按该网卡统计真实下行量"},
+		{text: fmt.Sprintf("每日比例: %.4f - %.4f", m.downmaskPolicy.MinRatio, m.downmaskPolicy.MaxRatio), hint: "每天按区间生成目标伪装比例"},
+		{text: "时间窗口: " + joinNonEmpty(m.downmaskPolicy.TimeWindowStart, m.downmaskPolicy.TimeWindowEnd), hint: "仅在该时间段内拉取，留空全天"},
+		{text: fmt.Sprintf("最大随机等待: %d 秒", m.downmaskPolicy.MaxJitterSeconds), hint: "每次执行前随机延迟上限"},
+		{text: fmt.Sprintf("最小缺口: %d bytes", m.downmaskPolicy.MinDeficitBytes), hint: "低于该缺口不触发拉取"},
+		{text: fmt.Sprintf("单次最大拉取: %d bytes", m.downmaskPolicy.MaxBytesPerRun), hint: "限制一次任务最多补多少流量"},
+		{text: "协议: " + m.downmaskAB.Protocol, hint: "Enter 切换 tcp/udp；UDP 使用服务端 payload"},
+		{text: "协议模式: " + m.downmaskAB.ProtocolMode, hint: "Enter 切换单连接或并行拉取"},
+		{text: fmt.Sprintf("默认远端端口: %d", m.downmaskAB.RemotePort), hint: "目标未填端口时使用，0 表示目标端口"},
+		{text: "默认本地源 IP: " + valueOrDash(m.downmaskAB.LocalIP), hint: "指定本机出口源 IP，可留空"},
+		{text: "默认 key: " + valueOrDash(m.downmaskAB.Token), hint: "默认鉴权 key；留空自动生成"},
+		{text: "限速: " + valueOrDash(m.downmaskAB.SpeedLimit), hint: "客户端拉取限速，例如 4M、32Mbps"},
+		{text: fmt.Sprintf("超时/并行/抖动: %ds %d %d%% %d%%", m.downmaskAB.TimeoutSeconds, m.downmaskAB.ParallelLimit, m.downmaskAB.SpeedJitterPercent, m.downmaskAB.BytesJitterPercent), hint: "连接超时、并发数和速率/字节随机抖动"},
 	}
 	return m.renderRows("下行伪装 / 自动拉取", rows, "Enter 切换/编辑 • e 编辑 • 0/Esc 返回 • q 退出")
+}
+
+func generateDownmaskKey() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 func (m model) updateDownmaskTargets(key tea.KeyMsg) (tea.Model, tea.Cmd) {

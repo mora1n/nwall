@@ -336,6 +336,34 @@ func TestParsePortListAllowsEmptyInput(t *testing.T) {
 	}
 }
 
+func TestParseByteRateAcceptsUnits(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want uint64
+	}{
+		{raw: "0", want: 0},
+		{raw: "1048576", want: 1048576},
+		{raw: "10MB", want: 10_000_000},
+		{raw: "10MB/s", want: 10_000_000},
+		{raw: "1GB", want: 1_000_000_000},
+		{raw: "2kb/s", want: 2_000},
+	}
+	for _, tc := range tests {
+		got, err := parseByteRate(tc.raw, "max_rate")
+		if err != nil {
+			t.Fatalf("parseByteRate(%q): %v", tc.raw, err)
+		}
+		if got != tc.want {
+			t.Fatalf("parseByteRate(%q)=%d want=%d", tc.raw, got, tc.want)
+		}
+	}
+	for _, raw := range []string{"", "10Mbps", "-1MB", "abc"} {
+		if _, err := parseByteRate(raw, "max_rate"); err == nil {
+			t.Fatalf("parseByteRate(%q) should fail", raw)
+		}
+	}
+}
+
 func TestParseCIDRListCanonicalizesSingleIPs(t *testing.T) {
 	got, err := parseCIDRList("127.0.0.1, 2001:db8::1")
 	if err != nil {
@@ -374,6 +402,9 @@ func TestOpenPortListAddsAndDeletesRanges(t *testing.T) {
 	}
 	next, _ = got.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	got = next.(model)
+	if got.input.value != "1" {
+		t.Fatalf("open port delete should default to current index, got %q", got.input.value)
+	}
 	got.input.value = "1"
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
@@ -397,6 +428,31 @@ func TestOpenPortListRejectsOverlapsAndClears(t *testing.T) {
 	got = next.(model)
 	if len(store.cfg.Protect.OpenPortRanges) != 0 || len(store.cfg.Protect.OpenPorts) != 0 {
 		t.Fatalf("clear mismatch ranges=%+v ports=%+v", store.cfg.Protect.OpenPortRanges, store.cfg.Protect.OpenPorts)
+	}
+}
+
+func TestListEntryHintsDescribePurpose(t *testing.T) {
+	m := model{cfg: conf.Default()}
+	for name, view := range map[string]string{
+		"protect":      m.viewProtect(),
+		"ingress":      m.viewIngress(),
+		"egress":       m.viewEgress(),
+		"dpi":          m.viewDPI(),
+		"lease":        m.viewLease(),
+		"leaseTrigger": m.viewLeaseTrigger(),
+	} {
+		if strings.Contains(view, "进入列表") {
+			t.Fatalf("%s should not use bare list hint:\n%s", name, view)
+		}
+	}
+	ingress := m.viewIngress()
+	for _, want := range []string{
+		"加入入站来源白名单",
+		"为指定端口单独配置地区白名单",
+	} {
+		if !strings.Contains(ingress, want) {
+			t.Fatalf("ingress hint missing %q:\n%s", want, ingress)
+		}
 	}
 }
 
@@ -447,6 +503,9 @@ func assertPortListFlow(t *testing.T, m model, update func(model, tea.KeyMsg) (t
 	got.cursor = 2
 	next, _ = update(got, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	got = next.(model)
+	if got.input.value != "3" {
+		t.Fatalf("port delete should default to current index, got %q", got.input.value)
+	}
 	got.input.value = "1,3-4"
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
@@ -490,6 +549,9 @@ func TestCustomCIDRListAddsEditsAndBatchDeletes(t *testing.T) {
 
 	next, _ = got.updateIngressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	got = next.(model)
+	if got.input.value != "1" {
+		t.Fatalf("ingress cidr delete should default to current index, got %q", got.input.value)
+	}
 	got.input.value = "1-2"
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	if len(store.cfg.Ingress.CustomCIDRs) != 0 {
@@ -508,6 +570,12 @@ func TestEgressCustomCIDRListAddsAndClears(t *testing.T) {
 	want := []string{"127.0.0.1/32", "2001:db8::1/128"}
 	if !reflect.DeepEqual(store.cfg.Egress.CustomCIDRs, want) {
 		t.Fatalf("egress cidr add mismatch got=%v want=%v", store.cfg.Egress.CustomCIDRs, want)
+	}
+	got.cursor = 1
+	next, _ = got.updateEgressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	if got.input.value != "2" {
+		t.Fatalf("egress cidr delete should default to current index, got %q", got.input.value)
 	}
 	next, _ = got.updateEgressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if len(store.cfg.Egress.CustomCIDRs) != 0 {
@@ -619,6 +687,110 @@ func TestKeysAreVisibleInTUI(t *testing.T) {
 		views := m.viewDownmask() + m.viewDownmaskServer() + m.viewDownmaskClient() + m.viewDownmaskTargets()
 		if !strings.Contains(views, want) {
 			t.Fatalf("downmask key should be visible: %q", want)
+		}
+	}
+}
+
+func TestLeaseKeyPromptGeneratesOnEmptyInput(t *testing.T) {
+	fs := &fakeStore{cfg: conf.Default()}
+	m := model{db: fs, cfg: fs.cfg, mode: viewLease, cursor: 1}
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewInput || !strings.Contains(got.input.help, "nwall lease keygen") {
+		t.Fatalf("lease key prompt mismatch mode=%v help=%q", got.mode, got.input.help)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if fs.cfg.Lease.LeaseKey == "" || got.cfg.Lease.LeaseKey != fs.cfg.Lease.LeaseKey {
+		t.Fatalf("lease key not generated store=%q model=%q", fs.cfg.Lease.LeaseKey, got.cfg.Lease.LeaseKey)
+	}
+	if !strings.Contains(got.status, fs.cfg.Lease.LeaseKey) {
+		t.Fatalf("generated lease key should be shown for copy, status=%q", got.status)
+	}
+}
+
+func TestDownmaskKeysPromptGenerateOnEmptyInput(t *testing.T) {
+	fs := &fakeStore{
+		cfg:   conf.Default(),
+		dmCfg: store.DownmaskConfig{SeedPath: store.DefaultDownmaskSeedPath, UDPPayloadBytes: 1200},
+		ab: store.DownmaskABPullConfig{
+			Protocol:       "tcp",
+			ProtocolMode:   "single",
+			RemotePort:     15301,
+			TimeoutSeconds: 30,
+			ParallelLimit:  1,
+		},
+	}
+	m := model{db: fs, cfg: fs.cfg, downmaskConfig: fs.dmCfg, downmaskAB: fs.ab, mode: viewDownmaskServer, cursor: 2}
+	next, _ := m.updateDownmaskServer(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewInput || !strings.Contains(got.input.help, "openssl rand -hex 16") {
+		t.Fatalf("downmask server key prompt mismatch mode=%v help=%q", got.mode, got.input.help)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if fs.dmCfg.Token == "" || got.downmaskConfig.Token != fs.dmCfg.Token {
+		t.Fatalf("downmask server key not generated store=%q model=%q", fs.dmCfg.Token, got.downmaskConfig.Token)
+	}
+	if !strings.Contains(got.status, fs.dmCfg.Token) {
+		t.Fatalf("generated downmask server key should be shown for copy, status=%q", got.status)
+	}
+
+	got.mode = viewDownmaskClient
+	got.cursor = 11
+	next, _ = got.updateDownmaskClient(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.mode != viewInput || !strings.Contains(got.input.help, "openssl rand -hex 16") {
+		t.Fatalf("downmask client key prompt mismatch mode=%v help=%q", got.mode, got.input.help)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if fs.ab.Token == "" || got.downmaskAB.Token != fs.ab.Token {
+		t.Fatalf("downmask default key not generated store=%q model=%q", fs.ab.Token, got.downmaskAB.Token)
+	}
+	if !strings.Contains(got.status, fs.ab.Token) {
+		t.Fatalf("generated downmask default key should be shown for copy, status=%q", got.status)
+	}
+}
+
+func TestLeaseAndDownmaskViewsExplainEditableFields(t *testing.T) {
+	m := model{
+		cfg: conf.Default(),
+		downmaskConfig: store.DownmaskConfig{
+			SeedPath:        store.DefaultDownmaskSeedPath,
+			MaxRate:         10_000_000,
+			UDPPayloadBytes: 1200,
+		},
+		downmaskAB: store.DownmaskABPullConfig{
+			Protocol:      "udp",
+			ProtocolMode:  "parallel",
+			SpeedLimit:    "4M",
+			ParallelLimit: 2,
+		},
+	}
+	for name, view := range map[string]string{
+		"lease":          m.viewLease(),
+		"leaseTrigger":   m.viewLeaseTrigger(),
+		"downmaskServer": m.viewDownmaskServer(),
+		"downmaskClient": m.viewDownmaskClient(),
+	} {
+		for _, forbidden := range []string{"# e 编辑", "# e 设置新 key"} {
+			if strings.Contains(view, forbidden) {
+				t.Fatalf("%s should explain fields instead of %q:\n%s", name, forbidden, view)
+			}
+		}
+	}
+	combined := m.viewLease() + m.viewLeaseTrigger() + m.viewDownmaskServer() + m.viewDownmaskClient()
+	for _, want := range []string{
+		"留空自动生成",
+		"公网 token",
+		"服务端发送限速",
+		"UDP payload",
+		"UDP 使用服务端 payload",
+		"10MB/s",
+	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("view explanation missing %q:\n%s", want, combined)
 		}
 	}
 }
