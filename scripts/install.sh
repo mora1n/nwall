@@ -193,6 +193,27 @@ reload_and_start_service() {
   fi
 }
 
+print_install_summary() {
+  if [[ "$DRY_RUN" == 1 ]]; then
+    return 0
+  fi
+  printf '\n'
+  printf 'nwall installed successfully.\n'
+  printf '\n'
+  printf 'Installed files:\n'
+  printf '  binary:        %s\n' "$PREFIX/bin/nwall"
+  printf '  state dir:     %s\n' "$STATEDIR"
+  printf '  database:      %s\n' "$STATEDIR/nwall.db"
+  printf '  systemd unit:  %s\n' "$SYSTEMD_DIR/nwall.service"
+  printf '\n'
+  printf 'Service:\n'
+  printf '  name:          nwall.service\n'
+  printf '  status:        systemctl status nwall.service\n'
+  printf '\n'
+  printf 'Next step:\n'
+  printf '  nwall\n'
+}
+
 main() {
   local src_dir="$SCRIPT_DIR"
   local tmpdir=""
@@ -215,6 +236,7 @@ main() {
   fi
   install_from_dir "$src_dir"
   reload_and_start_service
+  print_install_summary
 }
 
 main
