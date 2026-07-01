@@ -1,8 +1,8 @@
 dist/
 .codex/
 .claude/
-nwall
-nwall-geobuild
+/nwall
+/nwall-geobuild
 **/AGENTS.md
 **/CLAUDE.md
 **/.env
