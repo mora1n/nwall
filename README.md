@@ -17,14 +17,12 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mora1n/nwall/main/scripts/install.sh | bash
-systemctl enable --now nwall.service
 ```
 
 安装指定版本：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mora1n/nwall/main/scripts/install.sh | bash -s -- --version v0.1.0
-systemctl enable --now nwall.service
 ```
 
 手动下载 Release：
@@ -37,10 +35,9 @@ sha256sum -c SHA256SUMS
 tar -xzf "nwall-linux-amd64-${VERSION}.tar.gz"
 cd "nwall-linux-amd64-${VERSION}"
 ./install.sh
-systemctl enable --now nwall.service
 ```
 
-安装不会覆盖已有 `/var/lib/nwall/nwall.db`。保留旧 DB 重新安装时，nwall 会从同一路径加载配置。
+`install.sh` 会安装并启动 `nwall.service`。安装不会覆盖已有 `/var/lib/nwall/nwall.db`。保留旧 DB 重新安装时，nwall 会从同一路径加载配置。
 
 ## 工作原理
 

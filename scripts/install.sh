@@ -181,6 +181,18 @@ remove_legacy_units() {
   done
 }
 
+reload_and_start_service() {
+  if [[ "$DRY_RUN" == 1 ]]; then
+    run systemctl daemon-reload
+    run systemctl enable --now nwall.service
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    run systemctl daemon-reload
+    run systemctl enable --now nwall.service
+  fi
+}
+
 main() {
   local src_dir="$SCRIPT_DIR"
   local tmpdir=""
@@ -194,7 +206,7 @@ main() {
     fi
     if [[ "$DRY_RUN" == 1 ]]; then
       dry_run_remote_install "$version"
-      printf '%s\n' 'DRY-RUN: systemctl daemon-reload'
+      reload_and_start_service
       return 0
     fi
     tmpdir="$(mktemp -d)"
@@ -202,11 +214,7 @@ main() {
     src_dir="$(download_release "$version" "$tmpdir")"
   fi
   install_from_dir "$src_dir"
-  if [[ "$DRY_RUN" == 0 ]] && command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload
-  elif [[ "$DRY_RUN" == 1 ]]; then
-    printf '%s\n' 'DRY-RUN: systemctl daemon-reload'
-  fi
+  reload_and_start_service
 }
 
 main
