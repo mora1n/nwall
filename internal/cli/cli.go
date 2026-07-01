@@ -91,8 +91,6 @@ func runProtect(args []string) error {
 		return protectRender()
 	case "config":
 		return protectConfig(args[1:])
-	case "dpi":
-		return runDPI([]string{"run"})
 	default:
 		return fmt.Errorf("未知 protect 子命令: %s", args[0])
 	}
