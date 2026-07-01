@@ -16,8 +16,8 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 5); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 5); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -53,14 +53,10 @@ func (m model) updateProtect(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新回滚秒数")
 		}), nil
 	case 3:
-		return m.prompt("公开端口", joinInts(m.cfg.Protect.OpenPorts), "逗号分隔端口或范围；例如 22,443,40000-42000；留空清空", func(m *model, raw string) error {
-			ports, err := parsePortList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Protect.OpenPorts = ports
-			return m.saveConfig("已更新公开端口")
-		}), nil
+		m.mode = viewOpenPorts
+		m.cursor = 0
+		m.status = ""
+		m.err = ""
 	case 4:
 		return m.prompt("受保护端口", joinInts(m.cfg.Protect.GuardedPorts), "逗号分隔端口或范围；例如 40000-42000；guard_all=false 时使用", func(m *model, raw string) error {
 			ports, err := parsePortList(raw)
@@ -79,10 +75,82 @@ func (m model) viewProtect() string {
 		{text: "防护: " + plainOnOff(m.cfg.Protect.Enabled), hint: "总开关"},
 		{text: "保护所有端口: " + plainOnOff(m.cfg.Protect.GuardAll), hint: "关闭后只保护 guarded_ports"},
 		{text: fmt.Sprintf("默认回滚: %d 秒", m.cfg.Protect.RollbackTimeoutSec), hint: "e 编辑"},
-		{text: "公开端口: " + joinInts(m.cfg.Protect.OpenPorts), hint: "e 编辑；这些端口不受白名单限制"},
+		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "进入列表；这些端口不受白名单限制"},
 		{text: "受保护端口: " + joinInts(m.cfg.Protect.GuardedPorts), hint: "e 编辑；guard_all=false 时使用"},
 	}
-	return m.renderRows("防护", rows, "Enter 切换/编辑 • e 编辑 • 0/Esc 返回 • q 退出")
+	return m.renderRows("防护", rows, "Enter/l 切换/进入 • e 编辑 • h/0/Esc 返回 • q 退出")
+}
+
+func (m model) updateOpenPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	total := len(m.cfg.Protect.OpenPortRanges)
+	if quit, cmd := shouldQuit(key); quit {
+		return m, cmd
+	}
+	if m.backKey(key) {
+		m.mode = viewProtect
+		m.cursor = 3
+		return m, nil
+	}
+	switch key.String() {
+	case "a":
+		return m.prompt("新增公开端口", "", "逗号分隔端口或范围；例如 40000-42000,50000", func(m *model, raw string) error {
+			ranges, err := parsePortRanges(raw)
+			if err != nil {
+				return err
+			}
+			next := append([]conf.PortRange(nil), m.cfg.Protect.OpenPortRanges...)
+			next = append(next, ranges...)
+			if err := validatePortRangesNoOverlap(next); err != nil {
+				return err
+			}
+			m.cfg.Protect.OpenPortRanges = next
+			m.cfg.Protect.OpenPorts = expandPortRangesForTUI(next)
+			return m.saveConfig("已新增公开端口")
+		}), nil
+	case "d":
+		if total == 0 {
+			return m, nil
+		}
+		return m.prompt("删除公开端口", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+			indexes, err := parseIndexSelection(raw, len(m.cfg.Protect.OpenPortRanges))
+			if err != nil {
+				return err
+			}
+			m.cfg.Protect.OpenPortRanges = removePortRangesByIndex(m.cfg.Protect.OpenPortRanges, indexes)
+			m.cfg.Protect.OpenPorts = expandPortRangesForTUI(m.cfg.Protect.OpenPortRanges)
+			if m.cursor >= len(m.cfg.Protect.OpenPortRanges) && m.cursor > 0 {
+				m.cursor--
+			}
+			return m.saveConfig("已删除公开端口")
+		}), nil
+	case "c":
+		m.cfg.Protect.OpenPortRanges = nil
+		m.cfg.Protect.OpenPorts = nil
+		if err := m.saveConfig("已清空公开端口"); err != nil {
+			m.setError(err)
+		}
+		return m, nil
+	default:
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
+		}
+		return m, nil
+	}
+}
+
+func (m model) viewOpenPorts() string {
+	rows := make([]row, 0, len(m.cfg.Protect.OpenPortRanges))
+	for _, r := range m.cfg.Protect.OpenPortRanges {
+		rows = append(rows, row{
+			text:   formatPortRange(r),
+			hint:   "公开放行",
+			detail: "该端口项会先于入站白名单放行。",
+		})
+	}
+	if len(rows) == 0 {
+		rows = []row{{text: "暂无公开端口", hint: "按 a 新增"}}
+	}
+	return m.renderRows("防护 / 公开端口", rows, "a 新增 • d 按序号删除 • c 清空 • h/0/Esc 返回")
 }
 
 func (m model) updateIngress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -92,8 +160,8 @@ func (m model) updateIngress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 6); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 6); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -169,8 +237,8 @@ func (m model) updateEgress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 5); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 5); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -238,8 +306,8 @@ func (m model) updateDPI(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 4); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 4); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil

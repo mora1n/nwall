@@ -84,8 +84,34 @@ func TestDefaultPortsAreNotReinsertedAfterSave(t *testing.T) {
 	if len(got.Protect.OpenPorts) != 1 || got.Protect.OpenPorts[0] != 2222 {
 		t.Fatalf("默认 open port 不应重新插入: %+v", got.Protect.OpenPorts)
 	}
+	if len(got.Protect.OpenPortRanges) != 1 || got.Protect.OpenPortRanges[0].Start != 2222 || got.Protect.OpenPortRanges[0].End != 2222 {
+		t.Fatalf("默认 open port range 不应重新插入: %+v", got.Protect.OpenPortRanges)
+	}
 	if len(got.Protect.ProtocolSkipPorts) != 1 || got.Protect.ProtocolSkipPorts[0] != 2222 {
 		t.Fatalf("默认 skip port 不应重新插入: %+v", got.Protect.ProtocolSkipPorts)
+	}
+}
+
+func TestOpenPortRangesRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	cfg := conf.Default()
+	cfg.Protect.OpenPortRanges = []conf.PortRange{{Start: 40000, End: 42000}, {Start: 50000, End: 50000}}
+	cfg.Protect.OpenPorts = []int{40000, 40001, 42000, 50000}
+	if err := db.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	got, err := db.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(got.Protect.OpenPortRanges) != 2 {
+		t.Fatalf("ranges missing: %+v", got.Protect.OpenPortRanges)
+	}
+	if got.Protect.OpenPortRanges[0] != (conf.PortRange{Start: 40000, End: 42000}) || got.Protect.OpenPortRanges[1] != (conf.PortRange{Start: 50000, End: 50000}) {
+		t.Fatalf("ranges mismatch: %+v", got.Protect.OpenPortRanges)
+	}
+	if len(got.Protect.OpenPorts) != 2002 || got.Protect.OpenPorts[0] != 40000 || got.Protect.OpenPorts[len(got.Protect.OpenPorts)-1] != 50000 {
+		t.Fatalf("expanded ports mismatch: len=%d ports=%+v", len(got.Protect.OpenPorts), got.Protect.OpenPorts)
 	}
 }
 

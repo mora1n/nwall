@@ -302,6 +302,112 @@ func TestParsePortListRejectsInvalidRanges(t *testing.T) {
 	}
 }
 
+func TestOpenPortListAddsAndDeletesRanges(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Protect.OpenPortRanges = nil
+	store.cfg.Protect.OpenPorts = nil
+	m := model{db: store, cfg: store.cfg, mode: viewOpenPorts}
+	next, _ := m.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "40000-42000,50000"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if len(store.cfg.Protect.OpenPortRanges) != 2 {
+		t.Fatalf("ranges not saved: %+v", store.cfg.Protect.OpenPortRanges)
+	}
+	view := got.viewOpenPorts()
+	if !strings.Contains(view, "40000-42000") || !strings.Contains(view, "50000") || strings.Contains(view, "40001") {
+		t.Fatalf("open port view should preserve input groups:\n%s", view)
+	}
+	next, _ = got.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	got.input.value = "1"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if len(store.cfg.Protect.OpenPortRanges) != 1 || store.cfg.Protect.OpenPortRanges[0].Start != 50000 {
+		t.Fatalf("range delete mismatch: %+v", store.cfg.Protect.OpenPortRanges)
+	}
+}
+
+func TestOpenPortListRejectsOverlapsAndClears(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewOpenPorts}
+	next, _ := m.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "22"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.err == "" {
+		t.Fatal("overlapping open port should fail")
+	}
+	next, _ = m.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	got = next.(model)
+	if len(store.cfg.Protect.OpenPortRanges) != 0 || len(store.cfg.Protect.OpenPorts) != 0 {
+		t.Fatalf("clear mismatch ranges=%+v ports=%+v", store.cfg.Protect.OpenPortRanges, store.cfg.Protect.OpenPorts)
+	}
+}
+
+func TestIndexSelectionParsesListsAndRanges(t *testing.T) {
+	got, err := parseIndexSelection("1,3-4", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, idx := range []int{0, 2, 3} {
+		if _, ok := got[idx]; !ok {
+			t.Fatalf("missing index %d in %+v", idx, got)
+		}
+	}
+	if _, err := parseIndexSelection("0", 5); err == nil {
+		t.Fatal("index 0 should fail")
+	}
+}
+
+func TestVimNavigationKeys(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewHome, cursor: 1}
+	next, _ := m.updateHome(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	got := next.(model)
+	if got.mode != viewProtect {
+		t.Fatalf("l should enter current item, mode=%v", got.mode)
+	}
+	next, _ = got.updateProtect(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	got = next.(model)
+	if got.mode != viewHome {
+		t.Fatalf("h should go back, mode=%v", got.mode)
+	}
+	input := model{mode: viewInput, input: inputState{value: ""}}
+	next, _ = input.updateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	got = next.(model)
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	got = next.(model)
+	if got.input.value != "hl" {
+		t.Fatalf("h/l should remain text in input, got %q", got.input.value)
+	}
+}
+
+func TestRepeatScrollRequiresRepeatedKey(t *testing.T) {
+	m := model{mode: viewHome}
+	next, cmd, ok := m.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	got := next
+	if !ok || cmd == nil || got.cursor != 1 {
+		t.Fatalf("first down mismatch cursor=%d ok=%v cmd=%v", got.cursor, ok, cmd)
+	}
+	nextModel, _ := got.updateRepeat(repeatMsg{key: got.repeatKey, seq: got.repeatSeq})
+	got = nextModel.(model)
+	if got.cursor != 1 || got.repeatKey != "" {
+		t.Fatalf("single key should not keep repeating cursor=%d repeat=%q", got.cursor, got.repeatKey)
+	}
+	next, _, _ = got.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	got = next
+	next, _, _ = got.moveCursor(tea.KeyMsg{Type: tea.KeyDown}, 7)
+	got = next
+	nextModel, _ = got.updateRepeat(repeatMsg{key: got.repeatKey, seq: got.repeatSeq})
+	got = nextModel.(model)
+	if got.cursor != 4 {
+		t.Fatalf("repeated key should continue scrolling, cursor=%d", got.cursor)
+	}
+}
+
 func TestParsePortPolicyAcceptsCityCodes(t *testing.T) {
 	gdb, err := geo.Default()
 	if err != nil {

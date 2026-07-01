@@ -27,8 +27,8 @@ func (m model) updateRegions(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, len(provs)); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, len(provs)); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -58,8 +58,8 @@ func (m model) updateProvince(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, total); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, total); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -156,8 +156,8 @@ func (m model) updateEgressRegions(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 2
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, len(provs)); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, len(provs)); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -228,7 +228,7 @@ func (m model) updateIngressPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 		return m, nil
-	case "e", "enter":
+	case "e", "enter", "l":
 		if total == 0 {
 			return m, nil
 		}
@@ -240,8 +240,8 @@ func (m model) updateIngressPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	default:
-		if moved, ok := m.moveCursor(key, total); ok {
-			return moved, nil
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
 		}
 		return m, nil
 	}
@@ -257,8 +257,8 @@ func (m model) updatePortPolicyMode(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.portDraft = portPolicyDraft{}
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, 3); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 3); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -311,8 +311,8 @@ func (m model) updatePortPolicyRegions(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, len(provs)); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, len(provs)); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -355,8 +355,8 @@ func (m model) updatePortPolicyProvince(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, total); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, total); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil

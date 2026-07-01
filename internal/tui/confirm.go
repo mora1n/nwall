@@ -42,7 +42,7 @@ func (m model) updateConfirm(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.resetNumberBuffer(), nil
 	}
-	if key.String() == "enter" {
+	if m.enterKey(key) {
 		return m, nil
 	}
 	m.mode = m.confirm.previous

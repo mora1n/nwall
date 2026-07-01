@@ -87,6 +87,17 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("protect.open_ports: %w", err)
 		}
 	}
+	for _, r := range cfg.Protect.OpenPortRanges {
+		if err := validatePort(r.Start); err != nil {
+			return fmt.Errorf("protect.open_port_ranges: %w", err)
+		}
+		if err := validatePort(r.End); err != nil {
+			return fmt.Errorf("protect.open_port_ranges: %w", err)
+		}
+		if r.Start > r.End {
+			return fmt.Errorf("protect.open_port_ranges: 起始端口不能大于结束端口")
+		}
+	}
 	for _, p := range cfg.Protect.GuardedPorts {
 		if err := validatePort(p); err != nil {
 			return fmt.Errorf("protect.guarded_ports: %w", err)

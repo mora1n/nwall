@@ -45,6 +45,7 @@ const (
 	viewHome viewMode = iota
 	viewStatus
 	viewProtect
+	viewOpenPorts
 	viewIngress
 	viewIngressPorts
 	viewEgress
@@ -70,6 +71,9 @@ const (
 
 const visibleRows = 18
 const numberBufferTTL = 700 * time.Millisecond
+const repeatInitialDelay = 420 * time.Millisecond
+const repeatInterval = 55 * time.Millisecond
+const repeatKeepAlive = 650 * time.Millisecond
 
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
@@ -104,6 +108,11 @@ type portPolicyDraft struct {
 	policy conf.PortPolicy
 }
 
+type repeatMsg struct {
+	key string
+	seq int
+}
+
 type model struct {
 	db      storeAPI
 	actions actionAPI
@@ -129,6 +138,10 @@ type model struct {
 	input      inputState
 	confirm    confirmState
 	portDraft  portPolicyDraft
+	repeatKey  string
+	repeatSeq  int
+	repeatHits int
+	repeatLast time.Time
 	numBuf     string
 	numAt      time.Time
 	status     string
@@ -153,9 +166,19 @@ func Run(db *store.DB) error {
 func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
+	switch msg := msg.(type) {
+	case repeatMsg:
+		return m.updateRepeat(msg)
+	case tea.KeyMsg:
+		return m.updateKey(msg)
+	default:
 		return m, nil
+	}
+}
+
+func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !isMoveKey(key.String()) {
+		m = m.stopRepeat()
 	}
 	switch m.mode {
 	case viewHome:
@@ -164,6 +187,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateStatus(key)
 	case viewProtect:
 		return m.updateProtect(key)
+	case viewOpenPorts:
+		return m.updateOpenPorts(key)
 	case viewIngress:
 		return m.updateIngress(key)
 	case viewIngressPorts:
@@ -211,12 +236,90 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) updateRepeat(msg repeatMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.repeatSeq || msg.key != m.repeatKey {
+		return m, nil
+	}
+	if m.repeatHits < 2 || time.Since(m.repeatLast) > repeatKeepAlive {
+		return m.stopRepeat(), nil
+	}
+	total := m.repeatTotal()
+	if total <= 0 {
+		return m.stopRepeat(), nil
+	}
+	switch msg.key {
+	case "up":
+		if m.cursor <= 0 {
+			return m.stopRepeat(), nil
+		}
+		m.cursor--
+	case "down":
+		if m.cursor >= total-1 {
+			return m.stopRepeat(), nil
+		}
+		m.cursor++
+	default:
+		return m.stopRepeat(), nil
+	}
+	m, cmd := m.startRepeat(msg.key, repeatInterval)
+	return m, cmd
+}
+
+func (m model) repeatTotal() int {
+	switch m.mode {
+	case viewHome:
+		return 7
+	case viewStatus:
+		return 5
+	case viewProtect:
+		return 5
+	case viewOpenPorts:
+		return len(m.cfg.Protect.OpenPortRanges)
+	case viewIngress:
+		return 6
+	case viewIngressPorts:
+		return len(m.cfg.Ingress.PortPolicies)
+	case viewEgress:
+		return 5
+	case viewEgressRegions, viewRegions, viewPortPolicyRegions:
+		return len(m.geo.Provinces())
+	case viewDPI:
+		return 4
+	case viewLease:
+		return 7
+	case viewLeaseRoutes:
+		return len(m.cfg.Lease.Routes)
+	case viewLeaseTrigger:
+		return 3
+	case viewLeaseTriggerRoutes:
+		return len(m.cfg.LeaseTrigger.Routes)
+	case viewDownmask:
+		return 4
+	case viewDownmaskServer:
+		return 6
+	case viewDownmaskClient:
+		return 14
+	case viewDownmaskTargets:
+		return len(m.downmaskTargets)
+	case viewProvince:
+		return len(m.geo.CitiesByProvince(m.province)) + 1
+	case viewPortPolicyMode:
+		return 3
+	case viewPortPolicyProvince:
+		return len(m.geo.CitiesByProvince(m.province)) + 1
+	default:
+		return 0
+	}
+}
+
 func (m model) View() string {
 	switch m.mode {
 	case viewStatus:
 		return frame(m.viewStatus())
 	case viewProtect:
 		return frame(m.viewProtect())
+	case viewOpenPorts:
+		return frame(m.viewOpenPorts())
 	case viewIngress:
 		return frame(m.viewIngress())
 	case viewIngressPorts:

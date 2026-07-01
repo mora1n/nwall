@@ -57,6 +57,15 @@ func TestRenderOpenPortsElements(t *testing.T) {
 	}
 }
 
+func TestRenderPortIntervals(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Protect.OpenPorts = []int{40000, 40001, 40002, 50000}
+	out := Render(Input{Cfg: cfg})
+	if !strings.Contains(out, "elements = { 40000-40002, 50000 }") {
+		t.Errorf("open_ports 应压缩连续区间\n%s", out)
+	}
+}
+
 func TestRenderSingleTable(t *testing.T) {
 	out := Render(Input{Cfg: conf.Default()})
 	if strings.Count(out, "table inet "+TableName) != 1 {

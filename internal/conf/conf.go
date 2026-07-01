@@ -15,12 +15,20 @@ type Protect struct {
 	Enabled            bool
 	RollbackTimeoutSec int
 	GuardAll           bool
+	OpenPortRanges     []PortRange
 	OpenPorts          []int
 	GuardedPorts       []int
 	BlockHTTP          bool
 	BlockTLS           bool
 	BlockSOCKS         bool
 	ProtocolSkipPorts  []int
+}
+
+// PortRange preserves a user-visible port item while OpenPorts remains the
+// expanded rule input for existing render paths.
+type PortRange struct {
+	Start int
+	End   int
 }
 
 // Ingress 是入站白名单配置。
@@ -94,6 +102,7 @@ func Default() Config {
 			Enabled:            false,
 			RollbackTimeoutSec: 10,
 			GuardAll:           true,
+			OpenPortRanges:     []PortRange{{Start: 22, End: 22}},
 			OpenPorts:          []int{22},
 			GuardedPorts:       []int{},
 			ProtocolSkipPorts:  []int{22},

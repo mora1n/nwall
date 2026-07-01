@@ -19,10 +19,10 @@ func (m model) updateHome(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if quit, cmd := shouldQuit(key); quit {
 		return m, cmd
 	}
-	if moved, ok := m.moveCursor(key, 7); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 7); ok {
+		return moved, cmd
 	}
-	if !m.isEnterOrNumber(key) {
+	if !m.isEnterOrNumber(key) && !m.enterKey(key) {
 		return m, nil
 	}
 	var idx int
@@ -64,7 +64,7 @@ func (m model) viewHome() string {
 		{text: "TCP 租约", hint: "租约服务端、路由、token 触发器", detail: "Enter 进入；配置 TCP 租约服务、路由和公网 token 触发器。"},
 		{text: "下行伪装", hint: "服务端、自动拉取、目标和状态", detail: "Enter 进入；配置服务端、自动拉取策略和目标。"},
 	}
-	return m.renderRows("nwall 配置", rows, "↑/↓/k/j 选择 • 输入序号后 Enter • q 退出")
+	return m.renderRows("nwall 配置", rows, "↑/↓/k/j 选择 • Enter/l 进入 • 输入序号后 Enter • q 退出")
 }
 
 func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -74,10 +74,10 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 5); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 5); ok {
+		return moved, cmd
 	}
-	if !m.isEnterOrNumber(key) {
+	if !m.isEnterOrNumber(key) && !m.enterKey(key) {
 		return m, nil
 	}
 	var idx int
@@ -149,7 +149,7 @@ func (m model) viewStatus() string {
 		{text: "刷新状态", hint: "读取 daemon 状态", detail: "Enter 刷新 daemon 和下行伪装状态快照。"},
 	}
 	var b strings.Builder
-	b.WriteString(m.renderRows("状态 / 应用", rows, "Enter 执行当前项 • 输入序号后 Enter • 0/Esc 返回 • q 退出"))
+	b.WriteString(m.renderRows("状态 / 应用", rows, "Enter/l 执行当前项 • 输入序号后 Enter • h/0/Esc 返回 • q 退出"))
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("daemon: ") + m.daemonSummary() + "\n")
 	b.WriteString(helpStyle.Render("DB: ") + dbPath() + "\n")
@@ -250,26 +250,30 @@ func visibleRange(cursor, total int) (int, int) {
 	return start, start + visibleRows
 }
 
-func (m model) moveCursor(key tea.KeyMsg, total int) (model, bool) {
+func (m model) moveCursor(key tea.KeyMsg, total int) (model, tea.Cmd, bool) {
 	if total <= 0 {
 		m.cursor = 0
-		return m, false
+		return m.stopRepeat(), nil, false
 	}
-	switch key.String() {
-	case "up", "k":
+	switch normalizeMoveKey(key.String()) {
+	case "up":
 		m = m.resetNumberBuffer()
 		if m.cursor > 0 {
 			m.cursor--
+			m, cmd := m.startRepeat("up", repeatInitialDelay)
+			return m, cmd, true
 		}
-		return m, true
-	case "down", "j":
+		return m.stopRepeat(), nil, true
+	case "down":
 		m = m.resetNumberBuffer()
 		if m.cursor < total-1 {
 			m.cursor++
+			m, cmd := m.startRepeat("down", repeatInitialDelay)
+			return m, cmd, true
 		}
-		return m, true
+		return m.stopRepeat(), nil, true
 	default:
-		return m, false
+		return m, nil, false
 	}
 }
 
@@ -284,7 +288,7 @@ func shouldQuit(key tea.KeyMsg) (bool, tea.Cmd) {
 
 func (m model) backKey(key tea.KeyMsg) bool {
 	switch key.String() {
-	case "0", "esc", "backspace":
+	case "0", "esc", "backspace", "h":
 		if key.String() == "0" && m.currentNumberBuffer() != "" {
 			return false
 		}
@@ -295,15 +299,19 @@ func (m model) backKey(key tea.KeyMsg) bool {
 }
 
 func (m model) isEnterOrNumber(key tea.KeyMsg) bool {
-	if key.String() == "enter" {
+	if m.enterKey(key) {
 		return true
 	}
 	_, ok := numericChoice(key.String())
 	return ok
 }
 
+func (m model) enterKey(key tea.KeyMsg) bool {
+	return key.String() == "enter" || key.String() == "l"
+}
+
 func (m model) handleChoice(key tea.KeyMsg, total int) (model, int, bool) {
-	if key.String() == "enter" {
+	if m.enterKey(key) {
 		if m.numBuf != "" {
 			n, ok := numericChoice(m.numBuf)
 			if ok && n >= 1 && n <= total {
@@ -357,5 +365,43 @@ func (m model) currentNumberBuffer() string {
 func (m model) resetNumberBuffer() model {
 	m.numBuf = ""
 	m.numAt = time.Time{}
+	return m
+}
+
+func isMoveKey(key string) bool {
+	return normalizeMoveKey(key) != ""
+}
+
+func normalizeMoveKey(key string) string {
+	switch key {
+	case "up", "k":
+		return "up"
+	case "down", "j":
+		return "down"
+	default:
+		return ""
+	}
+}
+
+func (m model) startRepeat(key string, delay time.Duration) (model, tea.Cmd) {
+	if m.repeatKey == key {
+		m.repeatHits++
+	} else {
+		m.repeatHits = 1
+	}
+	m.repeatKey = key
+	m.repeatLast = time.Now()
+	m.repeatSeq++
+	seq := m.repeatSeq
+	return m, tea.Tick(delay, func(time.Time) tea.Msg {
+		return repeatMsg{key: key, seq: seq}
+	})
+}
+
+func (m model) stopRepeat() model {
+	m.repeatKey = ""
+	m.repeatSeq++
+	m.repeatHits = 0
+	m.repeatLast = time.Time{}
 	return m
 }

@@ -16,8 +16,8 @@ func (m model) updateDownmask(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 4); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 4); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) {
 		return m, nil
@@ -63,8 +63,8 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, 6); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 6); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -155,8 +155,8 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 1
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, 14); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 14); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -355,7 +355,7 @@ func (m model) updateDownmaskTargets(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "已删除下行伪装目标（需要重载 daemon 后生效）"
 		m.err = ""
 		return m, nil
-	case "e", "enter":
+	case "e", "enter", "l":
 		if total == 0 {
 			return m, nil
 		}
@@ -373,8 +373,8 @@ func (m model) updateDownmaskTargets(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskTarget(next)
 		}), nil
 	default:
-		if moved, ok := m.moveCursor(key, total); ok {
-			return moved, nil
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
 		}
 		return m, nil
 	}
@@ -403,7 +403,7 @@ func (m model) updateDownmaskStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 3
 		return m, nil
 	}
-	if key.String() == "r" || key.String() == "enter" {
+	if key.String() == "r" || m.enterKey(key) {
 		if err := m.loadPersistent(); err != nil {
 			m.setError(err)
 			return m, nil

@@ -167,11 +167,29 @@ func portsToStrings(ports []int) []string {
 		nums = append(nums, p)
 	}
 	sort.Ints(nums)
-	out := make([]string, 0, len(nums))
-	for _, p := range nums {
-		out = append(out, fmt.Sprintf("%d", p))
+	if len(nums) == 0 {
+		return nil
 	}
-	return out
+	out := make([]string, 0, len(nums))
+	start := nums[0]
+	prev := nums[0]
+	for _, p := range nums[1:] {
+		if p == prev+1 {
+			prev = p
+			continue
+		}
+		out = append(out, formatPortInterval(start, prev))
+		start = p
+		prev = p
+	}
+	return append(out, formatPortInterval(start, prev))
+}
+
+func formatPortInterval(start, end int) string {
+	if start == end {
+		return fmt.Sprintf("%d", start)
+	}
+	return fmt.Sprintf("%d-%d", start, end)
 }
 
 func portPolicyVerdicts(policies []PortPolicyInput) []string {

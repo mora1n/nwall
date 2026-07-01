@@ -16,8 +16,8 @@ func (m model) updateLease(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, ok := m.moveCursor(key, 7); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 7); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -133,7 +133,7 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 		return m, nil
-	case "e", "enter":
+	case "e", "enter", "l":
 		if total == 0 {
 			return m, nil
 		}
@@ -148,8 +148,8 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新租约路由")
 		}), nil
 	default:
-		if moved, ok := m.moveCursor(key, total); ok {
-			return moved, nil
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
 		}
 		return m, nil
 	}
@@ -178,8 +178,8 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 	}
-	if moved, ok := m.moveCursor(key, 3); ok {
-		return moved, nil
+	if moved, cmd, ok := m.moveCursor(key, 3); ok {
+		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
@@ -263,7 +263,7 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 		return m, nil
-	case "e", "enter":
+	case "e", "enter", "l":
 		if total == 0 {
 			return m, nil
 		}
@@ -278,8 +278,8 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新 token 路由")
 		}), nil
 	default:
-		if moved, ok := m.moveCursor(key, total); ok {
-			return moved, nil
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
 		}
 		return m, nil
 	}

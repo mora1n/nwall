@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 
+	"github.com/mora1n/nwall/internal/conf"
 	"github.com/mora1n/nwall/internal/mask"
 	"github.com/mora1n/nwall/internal/nft"
 	"github.com/mora1n/nwall/internal/protect"
@@ -211,6 +213,7 @@ func protectConfig(args []string) error {
 	}
 	if *clearOpenPorts {
 		cfg.Protect.OpenPorts = nil
+		cfg.Protect.OpenPortRanges = nil
 	}
 	if *clearGuardedPorts {
 		cfg.Protect.GuardedPorts = nil
@@ -218,6 +221,7 @@ func protectConfig(args []string) error {
 	for _, port := range openPorts {
 		cfg.Protect.OpenPorts = appendPortUnique(cfg.Protect.OpenPorts, port)
 	}
+	cfg.Protect.OpenPortRanges = portRangesFromPorts(cfg.Protect.OpenPorts)
 	for _, port := range guardedPorts {
 		cfg.Protect.GuardedPorts = appendPortUnique(cfg.Protect.GuardedPorts, port)
 	}
@@ -271,6 +275,35 @@ func (f *intFlag) Set(raw string) error {
 	}
 	*f = append(*f, value)
 	return nil
+}
+
+func portRangesFromPorts(ports []int) []conf.PortRange {
+	seen := map[int]struct{}{}
+	values := make([]int, 0, len(ports))
+	for _, port := range ports {
+		if _, ok := seen[port]; ok {
+			continue
+		}
+		seen[port] = struct{}{}
+		values = append(values, port)
+	}
+	sort.Ints(values)
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]conf.PortRange, 0, len(values))
+	start := values[0]
+	prev := values[0]
+	for _, port := range values[1:] {
+		if port == prev+1 {
+			prev = port
+			continue
+		}
+		out = append(out, conf.PortRange{Start: start, End: prev})
+		start = port
+		prev = port
+	}
+	return append(out, conf.PortRange{Start: start, End: prev})
 }
 
 func printUsage(w *os.File) {

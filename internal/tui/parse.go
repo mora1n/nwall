@@ -16,15 +16,31 @@ import (
 )
 
 func parsePortList(raw string) ([]int, error) {
+	ranges, err := parsePortRanges(raw)
+	if err != nil {
+		return nil, err
+	}
+	return expandPortRangesForTUI(ranges), nil
+}
+
+func parsePortRanges(raw string) ([]conf.PortRange, error) {
 	values := splitCSV(raw)
-	ports := make([]int, 0, len(values))
-	seen := map[int]struct{}{}
+	ranges := make([]conf.PortRange, 0, len(values))
 	for _, value := range values {
 		start, end, err := parsePortListItem(value)
 		if err != nil {
 			return nil, err
 		}
-		for port := start; port <= end; port++ {
+		ranges = append(ranges, conf.PortRange{Start: start, End: end})
+	}
+	return ranges, nil
+}
+
+func expandPortRangesForTUI(ranges []conf.PortRange) []int {
+	seen := map[int]struct{}{}
+	ports := make([]int, 0, len(ranges))
+	for _, r := range ranges {
+		for port := r.Start; port <= r.End; port++ {
 			if _, ok := seen[port]; ok {
 				continue
 			}
@@ -33,7 +49,7 @@ func parsePortList(raw string) ([]int, error) {
 		}
 	}
 	sort.Ints(ports)
-	return ports, nil
+	return ports
 }
 
 func parsePortListItem(raw string) (int, int, error) {
@@ -184,6 +200,108 @@ func joinInts(values []int) string {
 		parts = append(parts, fmt.Sprint(value))
 	}
 	return strings.Join(parts, ",")
+}
+
+func portRangesSummary(ranges []conf.PortRange) string {
+	if len(ranges) == 0 {
+		return "未设置"
+	}
+	if len(ranges) <= 3 {
+		return joinPortRanges(ranges)
+	}
+	return fmt.Sprintf("%d 项", len(ranges))
+}
+
+func joinPortRanges(ranges []conf.PortRange) string {
+	if len(ranges) == 0 {
+		return "未设置"
+	}
+	parts := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		parts = append(parts, formatPortRange(r))
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatPortRange(r conf.PortRange) string {
+	if r.Start == r.End {
+		return fmt.Sprint(r.Start)
+	}
+	return fmt.Sprintf("%d-%d", r.Start, r.End)
+}
+
+func validatePortRangesNoOverlap(ranges []conf.PortRange) error {
+	used := map[int]struct{}{}
+	for _, r := range ranges {
+		for port := r.Start; port <= r.End; port++ {
+			if _, ok := used[port]; ok {
+				return fmt.Errorf("公开端口范围重叠: %d", port)
+			}
+			used[port] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func parseIndexSelection(raw string, total int) (map[int]struct{}, error) {
+	values := splitCSV(raw)
+	if len(values) == 0 {
+		return nil, fmt.Errorf("请输入序号")
+	}
+	out := map[int]struct{}{}
+	for _, value := range values {
+		start, end, err := parseIndexSelectionItem(value, total)
+		if err != nil {
+			return nil, err
+		}
+		for idx := start; idx <= end; idx++ {
+			out[idx-1] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func parseIndexSelectionItem(raw string, total int) (int, int, error) {
+	value := strings.TrimSpace(raw)
+	if strings.Count(value, "-") == 0 {
+		idx, err := parseIndex(value, total)
+		return idx, idx, err
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("无效序号范围: %s", raw)
+	}
+	start, err := parseIndex(parts[0], total)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := parseIndex(parts[1], total)
+	if err != nil {
+		return 0, 0, err
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("无效序号范围: %s", raw)
+	}
+	return start, end, nil
+}
+
+func parseIndex(raw string, total int) (int, error) {
+	idx, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || idx < 1 || idx > total {
+		return 0, fmt.Errorf("序号必须位于 1-%d: %s", total, raw)
+	}
+	return idx, nil
+}
+
+func removePortRangesByIndex(ranges []conf.PortRange, indexes map[int]struct{}) []conf.PortRange {
+	out := make([]conf.PortRange, 0, len(ranges))
+	for i, r := range ranges {
+		if _, remove := indexes[i]; remove {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func splitHostPort(raw string) (string, int, error) {

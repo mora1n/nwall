@@ -85,6 +85,13 @@ func (db *DB) init(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS protect_open_ports(port INTEGER PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS protect_guarded_ports(port INTEGER PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS protect_protocol_skip_ports(port INTEGER PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS protect_port_ranges(
+			kind TEXT NOT NULL,
+			position INTEGER NOT NULL,
+			start_port INTEGER NOT NULL,
+			end_port INTEGER NOT NULL,
+			PRIMARY KEY (kind, position)
+		)`,
 		`CREATE TABLE IF NOT EXISTS ingress_config(
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			enabled INTEGER NOT NULL,
@@ -391,6 +398,12 @@ func (db *DB) LoadConfig() (conf.Config, error) {
 	if cfg.Protect.OpenPorts, err = db.intList(`SELECT port FROM protect_open_ports ORDER BY port`); err != nil {
 		return conf.Config{}, err
 	}
+	if cfg.Protect.OpenPortRanges, err = db.loadPortRanges("open"); err != nil {
+		return conf.Config{}, err
+	}
+	if len(cfg.Protect.OpenPortRanges) == 0 && len(cfg.Protect.OpenPorts) > 0 {
+		cfg.Protect.OpenPortRanges = compressPortsToRanges(cfg.Protect.OpenPorts)
+	}
 	if cfg.Protect.GuardedPorts, err = db.intList(`SELECT port FROM protect_guarded_ports ORDER BY port`); err != nil {
 		return conf.Config{}, err
 	}
@@ -453,6 +466,11 @@ func (db *DB) LoadConfig() (conf.Config, error) {
 // SaveConfig stores a complete config by splitting it into module tables.
 func (db *DB) SaveConfig(cfg conf.Config) error {
 	conf.ApplyFallbacks(&cfg)
+	var err error
+	cfg.Protect, err = db.normalizeProtectForSave(cfg.Protect)
+	if err != nil {
+		return err
+	}
 	if err := conf.Validate(cfg); err != nil {
 		return err
 	}
@@ -477,6 +495,40 @@ func (db *DB) SaveConfig(cfg conf.Config) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (db *DB) normalizeProtectForSave(cfg conf.Protect) (conf.Protect, error) {
+	expandedRanges := expandPortRanges(cfg.OpenPortRanges)
+	ports := uniqueInts(cfg.OpenPorts)
+	if sameInts(expandedRanges, ports) {
+		return cfg, nil
+	}
+	currentRanges, err := db.currentOpenPortRanges()
+	if err != nil {
+		return conf.Protect{}, err
+	}
+	if len(cfg.OpenPortRanges) == 0 || samePortRanges(cfg.OpenPortRanges, currentRanges) {
+		cfg.OpenPortRanges = compressPortsToRanges(ports)
+		cfg.OpenPorts = ports
+		return cfg, nil
+	}
+	cfg.OpenPorts = expandedRanges
+	return cfg, nil
+}
+
+func (db *DB) currentOpenPortRanges() ([]conf.PortRange, error) {
+	ranges, err := db.loadPortRanges("open")
+	if err != nil {
+		return nil, err
+	}
+	if len(ranges) > 0 {
+		return ranges, nil
+	}
+	ports, err := db.intList(`SELECT port FROM protect_open_ports ORDER BY port`)
+	if err != nil {
+		return nil, err
+	}
+	return compressPortsToRanges(ports), nil
 }
 
 func (db *DB) stringList(query string, args ...any) ([]string, error) {
@@ -509,6 +561,23 @@ func (db *DB) intList(query string, args ...any) ([]int, error) {
 			return nil, err
 		}
 		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) loadPortRanges(kind string) ([]conf.PortRange, error) {
+	rows, err := db.sql.Query(`SELECT start_port, end_port FROM protect_port_ranges WHERE kind=? ORDER BY position`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []conf.PortRange
+	for rows.Next() {
+		var r conf.PortRange
+		if err := rows.Scan(&r.Start, &r.End); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }
@@ -597,6 +666,13 @@ func (db *DB) loadLeaseTriggerRoutes() ([]conf.TriggerRoute, error) {
 func saveProtectTx(tx *sql.Tx, cfg conf.Protect) error {
 	if _, err := tx.Exec(`UPDATE protect_config SET enabled=?, rollback_timeout_sec=?, guard_all=?, block_http=?, block_tls=?, block_socks=? WHERE id=1`,
 		boolInt(cfg.Enabled), cfg.RollbackTimeoutSec, boolInt(cfg.GuardAll), boolInt(cfg.BlockHTTP), boolInt(cfg.BlockTLS), boolInt(cfg.BlockSOCKS)); err != nil {
+		return err
+	}
+	if len(cfg.OpenPortRanges) == 0 && len(cfg.OpenPorts) > 0 {
+		cfg.OpenPortRanges = compressPortsToRanges(cfg.OpenPorts)
+	}
+	cfg.OpenPorts = expandPortRanges(cfg.OpenPortRanges)
+	if err := replacePortRanges(tx, "open", cfg.OpenPortRanges); err != nil {
 		return err
 	}
 	if err := replaceInts(tx, "protect_open_ports", "port", cfg.OpenPorts); err != nil {
@@ -763,6 +839,54 @@ func replaceInts(tx *sql.Tx, table, col string, values []int) error {
 	return nil
 }
 
+func replacePortRanges(tx *sql.Tx, kind string, ranges []conf.PortRange) error {
+	if _, err := tx.Exec(`DELETE FROM protect_port_ranges WHERE kind=?`, kind); err != nil {
+		return err
+	}
+	for i, r := range ranges {
+		if _, err := tx.Exec(`INSERT INTO protect_port_ranges(kind, position, start_port, end_port) VALUES(?, ?, ?, ?)`, kind, i, r.Start, r.End); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func expandPortRanges(ranges []conf.PortRange) []int {
+	seen := map[int]struct{}{}
+	var out []int
+	for _, r := range ranges {
+		for port := r.Start; port <= r.End; port++ {
+			if _, ok := seen[port]; ok {
+				continue
+			}
+			seen[port] = struct{}{}
+			out = append(out, port)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+func compressPortsToRanges(ports []int) []conf.PortRange {
+	values := uniqueInts(ports)
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]conf.PortRange, 0, len(values))
+	start := values[0]
+	prev := values[0]
+	for _, port := range values[1:] {
+		if port == prev+1 {
+			prev = port
+			continue
+		}
+		out = append(out, conf.PortRange{Start: start, End: prev})
+		start = port
+		prev = port
+	}
+	return append(out, conf.PortRange{Start: start, End: prev})
+}
+
 func normalizeIngress(cfg conf.Ingress) conf.Ingress {
 	cfg.CNProvinces = uniqueStrings(cfg.CNProvinces)
 	cfg.CNCityCodes = uniqueStrings(cfg.CNCityCodes)
@@ -834,6 +958,30 @@ func uniqueInts(in []int) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+func sameInts(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func samePortRanges(left, right []conf.PortRange) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RuntimeValue returns a runtime text value by key.
