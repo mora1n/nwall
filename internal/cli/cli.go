@@ -317,15 +317,16 @@ func printUsage(w *os.File) {
   nwall reload                                         # 重新加载 DB 配置并重启 daemon 组件
   nwall protect enable|disable|status|render           # 开关/查看/渲染防护规则
   nwall protect config set --clear-open-ports --open-port 2222 --open-port 19082 --guard-all true # 配置公开端口
+  # DNAT 转发按公网原始端口配置，例如公网 41423 -> 后端:40422 时配置 41423
   nwall protect apply --confirm                        # 立即应用并确认规则
   nwall ingress enable|disable|status                  # 开关/查看入站白名单
   nwall ingress cn off|all|list|select <省份...>       # 配置全局入站中国省份白名单
   nwall ingress city add 440100 440300 510100          # 添加多个城市白名单；推荐用 TUI 按省/市选择
-  nwall ingress custom add|del|list <CIDR>             # 管理自定义入站 CIDR
+  nwall ingress custom add|del|list <IP/CIDR...>       # 管理自定义入站 CIDR
   nwall ingress port <port> cn|city|status|clear ...   # 管理单端口入站覆盖策略
   nwall egress enable|disable|status                   # 开关/查看出站白名单
   nwall egress cn off|all|list|select <省份...>        # 配置出站中国省份白名单
-  nwall egress custom add|del|list <CIDR>              # 管理自定义出站 CIDR
+  nwall egress custom add|del|list <IP/CIDR...>        # 管理自定义出站 CIDR
   nwall dpi http|tls|socks on|off                      # 开关协议封锁
   nwall dpi skip-port add|del|list <port>              # 管理协议封锁跳过端口
   nwall lease keygen                                   # 生成 TCP 租约共享 key

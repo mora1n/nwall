@@ -24,6 +24,8 @@ func TestRenderAlwaysHasSafetyNet(t *testing.T) {
 			"iif \"lo\" accept",
 			"ct state established,related accept",
 			"tcp dport @open_ports accept",
+			"type filter hook forward priority -200; policy accept;",
+			"ct status dnat ct state established,related accept",
 			"policy drop;",
 		} {
 			if !strings.Contains(out, must) {
@@ -36,12 +38,24 @@ func TestRenderAlwaysHasSafetyNet(t *testing.T) {
 func TestRenderGuardAllTogglesDispatch(t *testing.T) {
 	cfg := conf.Default()
 	cfg.Protect.GuardAll = true
-	if got := Render(Input{Cfg: cfg}); !strings.Contains(got, "ct state new jump ingress_guarded") {
-		t.Errorf("guard_all=true 应对所有新入站分流\n%s", got)
+	got := Render(Input{Cfg: cfg})
+	for _, must := range []string{
+		"ct state new jump ingress_guarded",
+		"ct status dnat ct state new jump forward_guarded",
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("guard_all=true 应对所有新入站和 DNAT 转发分流，缺少 %q\n%s", must, got)
+		}
 	}
 	cfg.Protect.GuardAll = false
-	if got := Render(Input{Cfg: cfg}); !strings.Contains(got, "tcp dport @guarded_ports ct state new jump ingress_guarded") {
-		t.Errorf("guard_all=false 应仅对 guarded_ports 分流\n%s", got)
+	got = Render(Input{Cfg: cfg})
+	for _, must := range []string{
+		"tcp dport @guarded_ports ct state new jump ingress_guarded",
+		"ct status dnat ct state new meta l4proto tcp ct original proto-dst @guarded_ports jump forward_guarded",
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("guard_all=false 应仅对 guarded_ports 分流，缺少 %q\n%s", must, got)
+		}
 	}
 }
 
@@ -65,9 +79,30 @@ func TestRenderOpenPort40422IsAccepted(t *testing.T) {
 		"elements = { 40422 }",
 		"tcp dport @open_ports accept",
 		"udp dport @open_ports accept",
+		"ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept",
+		"ct status dnat meta l4proto udp ct original proto-dst @open_ports accept",
+		"ct status dnat ct state new drop",
 	} {
 		if !strings.Contains(out, must) {
 			t.Fatalf("40422 公开端口渲染缺少 %q\n%s", must, out)
+		}
+	}
+}
+
+func TestRenderForwardUsesOriginalPublicPort(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Protect.OpenPorts = []int{40422}
+	cfg.Protect.GuardAll = false
+	cfg.Protect.GuardedPorts = []int{41423}
+	out := Render(Input{Cfg: cfg})
+	for _, must := range []string{
+		"set open_ports { type inet_service; flags interval; elements = { 40422 } }",
+		"set guarded_ports { type inet_service; flags interval; elements = { 41423 } }",
+		"ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept",
+		"ct status dnat ct state new meta l4proto tcp ct original proto-dst @guarded_ports jump forward_guarded",
+	} {
+		if !strings.Contains(out, must) {
+			t.Fatalf("DNAT forward 应按公网原始端口判定，缺少 %q\n%s", must, out)
 		}
 	}
 }
@@ -89,8 +124,10 @@ func TestRenderSingleTable(t *testing.T) {
 }
 
 func TestRenderPortPolicyOverride(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Ingress.Enabled = true
 	out := Render(Input{
-		Cfg: conf.Default(),
+		Cfg: cfg,
 		PortPolicies: []PortPolicyInput{{
 			ListenPort: 8443,
 			WLSrcV4:    []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
@@ -101,12 +138,19 @@ func TestRenderPortPolicyOverride(t *testing.T) {
 		"set wl_src4_p8443",
 		"set wl_src6_p8443",
 		"map port_policy",
+		"map forward_port_policy",
 		"8443 : jump wl_check_p8443",
+		"8443 : jump forward_wl_check_p8443",
 		"tcp dport vmap @port_policy",
 		"udp dport vmap @port_policy",
+		"meta l4proto tcp ct original proto-dst vmap @forward_port_policy",
+		"meta l4proto udp ct original proto-dst vmap @forward_port_policy",
 		"chain wl_check_p8443",
-		"ip saddr @wl_src4_p8443 accept",
-		"ip6 saddr @wl_src6_p8443 accept",
+		"chain forward_wl_check_p8443",
+		"ip saddr @wl_src4_p8443 jump ingress_allowed",
+		"ip6 saddr @wl_src6_p8443 jump ingress_allowed",
+		"ip saddr @wl_src4_p8443 jump forward_allowed",
+		"ip6 saddr @wl_src6_p8443 jump forward_allowed",
 		"\t\tdrop\n",
 	} {
 		if !strings.Contains(out, must) {
@@ -117,6 +161,7 @@ func TestRenderPortPolicyOverride(t *testing.T) {
 
 func TestRenderEgressAndDPI(t *testing.T) {
 	cfg := conf.Default()
+	cfg.Ingress.Enabled = true
 	cfg.Egress.Enabled = true
 	cfg.Protect.BlockHTTP = true
 	cfg.Protect.ProtocolSkipPorts = []int{22, 8443}
@@ -136,8 +181,8 @@ func TestRenderEgressAndDPI(t *testing.T) {
 		"type filter hook output priority -200; policy drop;",
 		"ip daddr @egress4 accept",
 		"ct mark 0x6e77616c accept",
-		"ct mark != 0x6e776470 ct state established,related accept",
 		"ct mark 0x6e776470 jump ingress_guarded",
+		"ct mark != 0x6e776470 ct state established,related accept",
 		"ct mark set 0x6e776470",
 		"queue num 100",
 		"timeout 10m",
@@ -153,6 +198,51 @@ func TestRenderEgressAndDPI(t *testing.T) {
 	ingress := between(t, out, "\tchain ingress {\n", "\t}\n")
 	if strings.Contains(ingress, "\t\tct state established,related accept\n") {
 		t.Errorf("DPI 开启时不应无条件放行 established，否则会绕过首个应用层 payload\n%s", out)
+	}
+	wlCheck := between(t, out, "\tchain wl_check {\n", "\t}\n")
+	if strings.Contains(wlCheck, "queue num") {
+		t.Errorf("白名单未命中时不应进入 DPI queue\n%s", out)
+	}
+	if !strings.Contains(wlCheck, "\t\tdrop\n") {
+		t.Errorf("白名单未命中应直接 drop\n%s", out)
+	}
+}
+
+func TestRenderDPIWorksWhenIngressWhitelistDisabled(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Protect.BlockHTTP = true
+	out := Render(Input{
+		Cfg:       cfg,
+		EnableDPI: true,
+	})
+
+	ingressGuarded := between(t, out, "\tchain ingress_guarded {\n", "\t}\n")
+	for _, must := range []string{
+		"\t\tjump ingress_allowed\n",
+		"timeout 3d",
+	} {
+		if !strings.Contains(ingressGuarded, must) {
+			t.Fatalf("白名单关闭时 ingress_guarded 应进入 allowed/DPI，缺少 %q\n%s", must, out)
+		}
+	}
+	if strings.Contains(ingressGuarded, "jump wl_check") {
+		t.Fatalf("白名单关闭时 ingress_guarded 不应进入空白名单链\n%s", out)
+	}
+
+	forwardGuarded := between(t, out, "\tchain forward_guarded {\n", "\t}\n")
+	if !strings.Contains(forwardGuarded, "\t\tjump forward_allowed\n") {
+		t.Fatalf("白名单关闭时 forward_guarded 应进入 allowed/DPI\n%s", out)
+	}
+	if strings.Contains(forwardGuarded, "jump forward_wl_check") {
+		t.Fatalf("白名单关闭时 forward_guarded 不应进入空白名单链\n%s", out)
+	}
+
+	ingressAllowed := between(t, out, "\tchain ingress_allowed {\n", "\t}\n")
+	forwardAllowed := between(t, out, "\tchain forward_allowed {\n", "\t}\n")
+	for _, chain := range []string{ingressAllowed, forwardAllowed} {
+		if !strings.Contains(chain, "ct mark set 0x6e776470") || !strings.Contains(chain, "queue num 100") {
+			t.Fatalf("白名单关闭且 DPI 开启时 allowed 链应进入 NFQUEUE\n%s", out)
+		}
 	}
 }
 

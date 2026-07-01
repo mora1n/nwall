@@ -6,14 +6,14 @@
 
 - 执行 `nwall` 默认打开 TUI；不用编辑配置文件
 - 配置、运行态、回滚快照和 nonce 保存在 `/var/lib/nwall/nwall.db`
-- 入站白名单支持省份、城市、自定义 CIDR、单端口覆盖
+- 入站白名单支持本机端口和 DNAT 入站转发，按省份、城市、自定义 CIDR、单端口覆盖放行
 - TCP 租约默认放行来源 IPv4 的 `/24`，可用 `mask=32` 改为单 IP
 - 下行伪装支持服务端发流、客户端按 RX/TX 缺口自动拉取
 - systemd 只需要一个 `nwall.service`
 
 ## 安装
 
-在线安装最新版：
+安装最新版：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mora1n/nwall/main/scripts/install.sh | bash
@@ -41,7 +41,7 @@ cd "nwall-linux-amd64-${VERSION}"
 
 ## 工作原理
 
-nwall 只管理本机规则。你通过 TUI 或 CLI 写入 SQLite DB，再执行 `nwall protect apply --confirm` 应用防护规则；未确认的 apply 会自动回滚，避免远程机器被错误规则锁死。
+nwall 管理本机 input 以及 DNAT 入站转发规则。你通过 TUI 或 CLI 写入 SQLite DB，再执行 `nwall protect apply --confirm` 应用防护规则；未确认的 apply 会自动回滚，避免远程机器被错误规则锁死。
 
 长期任务都由 `nwall daemon` 托管：协议封锁、TCP 租约服务端、公网 token 触发器、下行伪装服务端和自动拉取。`nwall status` 通过 `/run/nwall/nwall.sock` 查看守护进程状态；`nwall reload` 让守护进程重新读取 DB 配置。
 
@@ -89,6 +89,9 @@ nwall reload
 - `440100 440300 510100` 示例为广州、深圳、成都
 - 选中省份后，同省城市会被省份 IP 段覆盖
 - `ingress port 443 ...` 只影响指定端口
+- DNAT 转发按公网原始端口匹配，例如公网 `41423 -> 后端:40422` 应配置 `41423`，不是后端端口 `40422`
+- `open_ports` 同样按公网原始端口公开放行 DNAT 转发入口；未公开的 DNAT 新连接会进入白名单判定，未命中则 drop
+- 入站白名单关闭时只关闭来源限制；已开启的 HTTP/TLS/SOCKS 协议封锁仍会检查受保护流量
 
 ## 出站白名单
 

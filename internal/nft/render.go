@@ -45,6 +45,7 @@ func Render(in Input) string {
 	b.WriteString("table inet " + TableName + " {\n")
 	renderSets(&b, in)
 	renderIngress(&b, in)
+	renderForward(&b, in)
 	renderEgress(&b, in)
 	b.WriteString("}\n")
 	return b.String()
@@ -62,7 +63,8 @@ func renderSets(b *strings.Builder, in Input) {
 		fmt.Fprintf(b, "\tset wl_src6_p%d { type ipv6_addr; flags interval; auto-merge;%s }\n", policy.ListenPort, elemsInline(prefixesToStrings(policy.WLSrcV6)))
 	}
 	if len(in.PortPolicies) > 0 {
-		fmt.Fprintf(b, "\tmap port_policy { type inet_service : verdict;%s }\n", elemsInline(portPolicyVerdicts(in.PortPolicies)))
+		fmt.Fprintf(b, "\tmap port_policy { type inet_service : verdict;%s }\n", elemsInline(portPolicyVerdicts(in.PortPolicies, "wl_check_p")))
+		fmt.Fprintf(b, "\tmap forward_port_policy { type inet_service : verdict;%s }\n", elemsInline(portPolicyVerdicts(in.PortPolicies, "forward_wl_check_p")))
 	}
 	fmt.Fprintf(b, "\tset skip_ports { type inet_service; flags interval;%s }\n", elemsInline(portsToStrings(cfg.Protect.ProtocolSkipPorts)))
 	fmt.Fprintf(b, "\tset egress4 { type ipv4_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.EgressV4)))
@@ -81,8 +83,8 @@ func renderIngress(b *strings.Builder, in Input) {
 	b.WriteString("\t\tiif \"lo\" accept\n")
 	if in.EnableDPI {
 		fmt.Fprintf(b, "\t\tct mark 0x%x accept\n", dpi.AcceptConnMark)
-		fmt.Fprintf(b, "\t\tct mark != 0x%x ct state established,related accept\n", dpi.PendingConnMark)
 		fmt.Fprintf(b, "\t\tct mark 0x%x jump ingress_guarded\n", dpi.PendingConnMark)
+		fmt.Fprintf(b, "\t\tct mark != 0x%x ct state established,related accept\n", dpi.PendingConnMark)
 	} else {
 		b.WriteString("\t\tct state established,related accept\n")
 	}
@@ -100,35 +102,104 @@ func renderIngress(b *strings.Builder, in Input) {
 	// ③ 其余落 policy drop 兜底（隐身）。
 	b.WriteString("\t}\n")
 
-	// 受保护流量判定链：租约命中即续期，再查白名单。
+	// 受保护流量判定链：租约命中即续期，再查白名单；命中后才进入 DPI。
 	b.WriteString("\tchain ingress_guarded {\n")
 	leaseTimeout := strings.TrimSpace(in.LeaseTimeout)
 	if leaseTimeout == "" {
 		leaseTimeout = "3d"
 	}
-	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } accept\n", leaseTimeout)
-	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } accept\n", leaseTimeout)
-	b.WriteString("\t\ttcp dport @skip_ports accept\n")
-	b.WriteString("\t\tudp dport @skip_ports accept\n")
+	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } jump ingress_allowed\n", leaseTimeout)
+	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } jump ingress_allowed\n", leaseTimeout)
 	if len(in.PortPolicies) > 0 {
 		b.WriteString("\t\ttcp dport vmap @port_policy\n")
 		b.WriteString("\t\tudp dport vmap @port_policy\n")
 	}
-	b.WriteString("\t\tjump wl_check\n")
+	if cfg.Ingress.Enabled {
+		b.WriteString("\t\tjump wl_check\n")
+	} else {
+		b.WriteString("\t\tjump ingress_allowed\n")
+	}
 	b.WriteString("\t}\n")
 
 	for _, policy := range in.PortPolicies {
 		fmt.Fprintf(b, "\tchain wl_check_p%d {\n", policy.ListenPort)
-		fmt.Fprintf(b, "\t\tip saddr @wl_src4_p%d accept\n", policy.ListenPort)
-		fmt.Fprintf(b, "\t\tip6 saddr @wl_src6_p%d accept\n", policy.ListenPort)
+		fmt.Fprintf(b, "\t\tip saddr @wl_src4_p%d jump ingress_allowed\n", policy.ListenPort)
+		fmt.Fprintf(b, "\t\tip6 saddr @wl_src6_p%d jump ingress_allowed\n", policy.ListenPort)
 		b.WriteString("\t\tdrop\n")
 		b.WriteString("\t}\n")
 	}
 
-	// 白名单判定链（M2 起 wl_src* 有元素时生效；当前未命中即 drop）。
+	// 白名单判定链（M2 起 wl_src* 有元素时生效；未命中即 drop）。
 	b.WriteString("\tchain wl_check {\n")
-	b.WriteString("\t\tip saddr @wl_src4 accept\n")
-	b.WriteString("\t\tip6 saddr @wl_src6 accept\n")
+	b.WriteString("\t\tip saddr @wl_src4 jump ingress_allowed\n")
+	b.WriteString("\t\tip6 saddr @wl_src6 jump ingress_allowed\n")
+	b.WriteString("\t\tdrop\n")
+	b.WriteString("\t}\n")
+
+	renderAllowedChain(b, "ingress_allowed", "\t\ttcp dport @skip_ports accept\n\t\tudp dport @skip_ports accept\n", in)
+}
+
+func renderForward(b *strings.Builder, in Input) {
+	cfg := in.Cfg
+	fmt.Fprintf(b, "\tchain forward {\n")
+	fmt.Fprintf(b, "\t\ttype filter hook forward priority %d; policy accept;\n", inputPriority)
+	if in.EnableDPI {
+		fmt.Fprintf(b, "\t\tct status dnat ct mark 0x%x accept\n", dpi.AcceptConnMark)
+		fmt.Fprintf(b, "\t\tct status dnat ct mark 0x%x jump forward_guarded\n", dpi.PendingConnMark)
+		b.WriteString("\t\tct status dnat ct state established,related accept\n")
+	} else {
+		b.WriteString("\t\tct status dnat ct state established,related accept\n")
+	}
+	b.WriteString("\t\tct status dnat ct state invalid drop\n")
+	b.WriteString("\t\tct status dnat meta l4proto tcp ct original proto-dst @open_ports accept\n")
+	b.WriteString("\t\tct status dnat meta l4proto udp ct original proto-dst @open_ports accept\n")
+	if cfg.Protect.GuardAll {
+		b.WriteString("\t\tct status dnat ct state new jump forward_guarded\n")
+	} else {
+		b.WriteString("\t\tct status dnat ct state new meta l4proto tcp ct original proto-dst @guarded_ports jump forward_guarded\n")
+		b.WriteString("\t\tct status dnat ct state new meta l4proto udp ct original proto-dst @guarded_ports jump forward_guarded\n")
+	}
+	b.WriteString("\t\tct status dnat ct state new drop\n")
+	b.WriteString("\t}\n")
+
+	leaseTimeout := strings.TrimSpace(in.LeaseTimeout)
+	if leaseTimeout == "" {
+		leaseTimeout = "3d"
+	}
+	b.WriteString("\tchain forward_guarded {\n")
+	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } jump forward_allowed\n", leaseTimeout)
+	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } jump forward_allowed\n", leaseTimeout)
+	if len(in.PortPolicies) > 0 {
+		b.WriteString("\t\tmeta l4proto tcp ct original proto-dst vmap @forward_port_policy\n")
+		b.WriteString("\t\tmeta l4proto udp ct original proto-dst vmap @forward_port_policy\n")
+	}
+	if cfg.Ingress.Enabled {
+		b.WriteString("\t\tjump forward_wl_check\n")
+	} else {
+		b.WriteString("\t\tjump forward_allowed\n")
+	}
+	b.WriteString("\t}\n")
+
+	for _, policy := range in.PortPolicies {
+		fmt.Fprintf(b, "\tchain forward_wl_check_p%d {\n", policy.ListenPort)
+		fmt.Fprintf(b, "\t\tip saddr @wl_src4_p%d jump forward_allowed\n", policy.ListenPort)
+		fmt.Fprintf(b, "\t\tip6 saddr @wl_src6_p%d jump forward_allowed\n", policy.ListenPort)
+		b.WriteString("\t\tdrop\n")
+		b.WriteString("\t}\n")
+	}
+
+	b.WriteString("\tchain forward_wl_check {\n")
+	b.WriteString("\t\tip saddr @wl_src4 jump forward_allowed\n")
+	b.WriteString("\t\tip6 saddr @wl_src6 jump forward_allowed\n")
+	b.WriteString("\t\tdrop\n")
+	b.WriteString("\t}\n")
+
+	renderAllowedChain(b, "forward_allowed", "\t\tmeta l4proto tcp ct original proto-dst @skip_ports accept\n\t\tmeta l4proto udp ct original proto-dst @skip_ports accept\n", in)
+}
+
+func renderAllowedChain(b *strings.Builder, name, skipRules string, in Input) {
+	b.WriteString("\tchain " + name + " {\n")
+	b.WriteString(skipRules)
 	if in.EnableDPI {
 		queue := in.NFQueueNum
 		if queue <= 0 {
@@ -137,7 +208,7 @@ func renderIngress(b *strings.Builder, in Input) {
 		fmt.Fprintf(b, "\t\tct mark set 0x%x\n", dpi.PendingConnMark)
 		fmt.Fprintf(b, "\t\tqueue num %d\n", queue)
 	} else {
-		b.WriteString("\t\tdrop\n")
+		b.WriteString("\t\taccept\n")
 	}
 	b.WriteString("\t}\n")
 }
@@ -192,10 +263,10 @@ func formatPortInterval(start, end int) string {
 	return fmt.Sprintf("%d-%d", start, end)
 }
 
-func portPolicyVerdicts(policies []PortPolicyInput) []string {
+func portPolicyVerdicts(policies []PortPolicyInput, chainPrefix string) []string {
 	out := make([]string, 0, len(policies))
 	for _, policy := range policies {
-		out = append(out, fmt.Sprintf("%d : jump wl_check_p%d", policy.ListenPort, policy.ListenPort))
+		out = append(out, fmt.Sprintf("%d : jump %s%d", policy.ListenPort, chainPrefix, policy.ListenPort))
 	}
 	return out
 }
