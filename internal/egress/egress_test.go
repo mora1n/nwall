@@ -24,3 +24,21 @@ default via fe80::1 dev eth0`)
 		t.Fatalf("gateway 解析不符: %v", got)
 	}
 }
+
+func TestSpecialCIDRsIncludeLoopback(t *testing.T) {
+	got := specialCIDRs()
+	for _, want := range []string{"127.0.0.0/8", "::1/128"} {
+		if !hasString(got, want) {
+			t.Fatalf("special CIDRs should include %s: %v", want, got)
+		}
+	}
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

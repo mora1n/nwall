@@ -26,7 +26,7 @@ func ApplyFallbacks(cfg *Config) {
 		cfg.Egress.CNMode = "off"
 	}
 	if cfg.Lease.IdleTTL == "" {
-		cfg.Lease.IdleTTL = "10m"
+		cfg.Lease.IdleTTL = "3d"
 	}
 	if cfg.Lease.ListenHost == "" {
 		cfg.Lease.ListenHost = "127.0.0.1"

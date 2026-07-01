@@ -197,14 +197,8 @@ func (m model) updateIngress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.err = ""
 	case 3:
-		return m.prompt("入站自定义 CIDR", strings.Join(m.cfg.Ingress.CustomCIDRs, ","), "逗号分隔 IP/CIDR；留空清空", func(m *model, raw string) error {
-			cidrs, err := parseCIDRList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Ingress.CustomCIDRs = cidrs
-			return m.saveConfig("已更新入站自定义 CIDR")
-		}), nil
+		m.mode = viewIngressCustomCIDRs
+		m.cursor = 0
 	case 4:
 		m.mode = viewIngressPorts
 		m.cursor = 0
@@ -223,11 +217,83 @@ func (m model) viewIngress() string {
 		{text: "入站白名单: " + plainOnOff(m.cfg.Ingress.Enabled), hint: "总开关"},
 		{text: "CN 模式: " + m.cfg.Ingress.CNMode, hint: "Enter 循环 off/all/provinces"},
 		{text: "省市选择: " + m.regionSummary(), hint: "进入省/市树"},
-		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Ingress.CustomCIDRs)), hint: "e 编辑"},
+		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Ingress.CustomCIDRs)), hint: "进入列表"},
 		{text: "端口覆盖策略: " + countSummary(len(m.cfg.Ingress.PortPolicies)), hint: "进入列表"},
 		{text: "清空省市选择", hint: "只清空全局省份/城市"},
 	}
 	return m.renderRows("入站", rows, "Enter 执行/进入 • e 编辑 • 0/Esc 返回 • q 退出")
+}
+
+func (m model) updateIngressCustomCIDRs(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	total := len(m.cfg.Ingress.CustomCIDRs)
+	if quit, cmd := shouldQuit(key); quit {
+		return m, cmd
+	}
+	if m.backKey(key) {
+		m.mode = viewIngress
+		m.cursor = 3
+		return m, nil
+	}
+	switch key.String() {
+	case "a":
+		return m.prompt("新增入站自定义 CIDR", "", "输入 IP/CIDR；支持逗号分隔多个", func(m *model, raw string) error {
+			cidrs, err := parseCIDRList(raw)
+			if err != nil {
+				return err
+			}
+			m.cfg.Ingress.CustomCIDRs = appendCIDRUnique(m.cfg.Ingress.CustomCIDRs, cidrs...)
+			return m.saveConfig("已新增入站自定义 CIDR")
+		}), nil
+	case "e", "enter", "l":
+		if total == 0 {
+			return m, nil
+		}
+		idx := m.cursor
+		old := m.cfg.Ingress.CustomCIDRs[idx]
+		return m.prompt("修改入站自定义 CIDR", old, "输入单个 IP/CIDR", func(m *model, raw string) error {
+			cidr, err := parseSingleCIDR(raw)
+			if err != nil {
+				return err
+			}
+			next := append([]string(nil), m.cfg.Ingress.CustomCIDRs...)
+			if idx < 0 || idx >= len(next) {
+				return fmt.Errorf("序号已失效")
+			}
+			next[idx] = cidr
+			m.cfg.Ingress.CustomCIDRs = uniqueSorted(next)
+			return m.saveConfig("已修改入站自定义 CIDR")
+		}), nil
+	case "d":
+		if total == 0 {
+			return m, nil
+		}
+		return m.prompt("删除入站自定义 CIDR", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+			indexes, err := parseIndexSelection(raw, len(m.cfg.Ingress.CustomCIDRs))
+			if err != nil {
+				return err
+			}
+			m.cfg.Ingress.CustomCIDRs = removeStringsByIndex(m.cfg.Ingress.CustomCIDRs, indexes)
+			if m.cursor >= len(m.cfg.Ingress.CustomCIDRs) && m.cursor > 0 {
+				m.cursor--
+			}
+			return m.saveConfig("已删除入站自定义 CIDR")
+		}), nil
+	case "c":
+		m.cfg.Ingress.CustomCIDRs = nil
+		if err := m.saveConfig("已清空入站自定义 CIDR"); err != nil {
+			m.setError(err)
+		}
+		return m, nil
+	default:
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
+		}
+		return m, nil
+	}
+}
+
+func (m model) viewIngressCustomCIDRs() string {
+	return m.viewCustomCIDRs("入站 / 自定义 CIDR", m.cfg.Ingress.CustomCIDRs)
 }
 
 func (m model) updateEgress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -271,14 +337,8 @@ func (m model) updateEgress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = viewEgressRegions
 		m.cursor = 0
 	case 3:
-		return m.prompt("出站自定义 CIDR", strings.Join(m.cfg.Egress.CustomCIDRs, ","), "逗号分隔 IP/CIDR；留空清空", func(m *model, raw string) error {
-			cidrs, err := parseCIDRList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Egress.CustomCIDRs = cidrs
-			return m.saveConfig("已更新出站自定义 CIDR")
-		}), nil
+		m.mode = viewEgressCustomCIDRs
+		m.cursor = 0
 	case 4:
 		m.cfg.Egress.CNProvinces = nil
 		if err := m.saveConfig("已清空出站省份选择"); err != nil {
@@ -293,10 +353,93 @@ func (m model) viewEgress() string {
 		{text: "出站白名单: " + plainOnOff(m.cfg.Egress.Enabled), hint: "总开关"},
 		{text: "CN 模式: " + m.cfg.Egress.CNMode, hint: "Enter 循环 off/all/provinces"},
 		{text: "省份选择: " + countSummary(len(m.cfg.Egress.CNProvinces)), hint: "进入省份树"},
-		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Egress.CustomCIDRs)), hint: "e 编辑"},
+		{text: "自定义 CIDR: " + countSummary(len(m.cfg.Egress.CustomCIDRs)), hint: "进入列表"},
 		{text: "清空省份选择", hint: "只清空出站省份"},
 	}
 	return m.renderRows("出站", rows, "Enter 执行/进入 • e 编辑 • 0/Esc 返回 • q 退出")
+}
+
+func (m model) updateEgressCustomCIDRs(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	total := len(m.cfg.Egress.CustomCIDRs)
+	if quit, cmd := shouldQuit(key); quit {
+		return m, cmd
+	}
+	if m.backKey(key) {
+		m.mode = viewEgress
+		m.cursor = 3
+		return m, nil
+	}
+	switch key.String() {
+	case "a":
+		return m.prompt("新增出站自定义 CIDR", "", "输入 IP/CIDR；支持逗号分隔多个", func(m *model, raw string) error {
+			cidrs, err := parseCIDRList(raw)
+			if err != nil {
+				return err
+			}
+			m.cfg.Egress.CustomCIDRs = appendCIDRUnique(m.cfg.Egress.CustomCIDRs, cidrs...)
+			return m.saveConfig("已新增出站自定义 CIDR")
+		}), nil
+	case "e", "enter", "l":
+		if total == 0 {
+			return m, nil
+		}
+		idx := m.cursor
+		old := m.cfg.Egress.CustomCIDRs[idx]
+		return m.prompt("修改出站自定义 CIDR", old, "输入单个 IP/CIDR", func(m *model, raw string) error {
+			cidr, err := parseSingleCIDR(raw)
+			if err != nil {
+				return err
+			}
+			next := append([]string(nil), m.cfg.Egress.CustomCIDRs...)
+			if idx < 0 || idx >= len(next) {
+				return fmt.Errorf("序号已失效")
+			}
+			next[idx] = cidr
+			m.cfg.Egress.CustomCIDRs = uniqueSorted(next)
+			return m.saveConfig("已修改出站自定义 CIDR")
+		}), nil
+	case "d":
+		if total == 0 {
+			return m, nil
+		}
+		return m.prompt("删除出站自定义 CIDR", "", "输入序号；支持 1 或 1,2 或 1-3", func(m *model, raw string) error {
+			indexes, err := parseIndexSelection(raw, len(m.cfg.Egress.CustomCIDRs))
+			if err != nil {
+				return err
+			}
+			m.cfg.Egress.CustomCIDRs = removeStringsByIndex(m.cfg.Egress.CustomCIDRs, indexes)
+			if m.cursor >= len(m.cfg.Egress.CustomCIDRs) && m.cursor > 0 {
+				m.cursor--
+			}
+			return m.saveConfig("已删除出站自定义 CIDR")
+		}), nil
+	case "c":
+		m.cfg.Egress.CustomCIDRs = nil
+		if err := m.saveConfig("已清空出站自定义 CIDR"); err != nil {
+			m.setError(err)
+		}
+		return m, nil
+	default:
+		if moved, cmd, ok := m.moveCursor(key, total); ok {
+			return moved, cmd
+		}
+		return m, nil
+	}
+}
+
+func (m model) viewEgressCustomCIDRs() string {
+	return m.viewCustomCIDRs("出站 / 自定义 CIDR", m.cfg.Egress.CustomCIDRs)
+}
+
+func (m model) viewCustomCIDRs(title string, cidrs []string) string {
+	rows := make([]row, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		rows = append(rows, row{text: cidr, hint: "自定义放行"})
+	}
+	if len(rows) == 0 {
+		rows = []row{{text: "暂无自定义 CIDR", hint: "按 a 新增"}}
+	}
+	return m.renderRows(title, rows, "a 新增 • e/Enter 修改 • d 按序号删除 • c 清空 • h/0/Esc 返回")
 }
 
 func (m model) updateDPI(key tea.KeyMsg) (tea.Model, tea.Cmd) {

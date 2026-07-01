@@ -104,7 +104,7 @@ func renderIngress(b *strings.Builder, in Input) {
 	b.WriteString("\tchain ingress_guarded {\n")
 	leaseTimeout := strings.TrimSpace(in.LeaseTimeout)
 	if leaseTimeout == "" {
-		leaseTimeout = "10m"
+		leaseTimeout = "3d"
 	}
 	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } accept\n", leaseTimeout)
 	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } accept\n", leaseTimeout)

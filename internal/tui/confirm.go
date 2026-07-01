@@ -6,6 +6,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+type actionDoneMsg struct {
+	model model
+}
+
 func (m model) confirmAction(title, message, help string, previous viewMode, submit func(*model) error) model {
 	m.mode = viewConfirm
 	m.confirm = confirmState{
@@ -35,12 +39,20 @@ func (m model) updateConfirm(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		submit := m.confirm.confirm
 		m.mode = m.confirm.previous
 		m.confirm = confirmState{}
-		if submit != nil {
-			if err := submit(&m); err != nil {
-				m.setError(err)
+		m.status = "正在执行，请稍候..."
+		m.err = ""
+		m.busy = true
+		m = m.resetNumberBuffer()
+		return m, func() tea.Msg {
+			next := m
+			next.busy = false
+			if submit != nil {
+				if err := submit(&next); err != nil {
+					next.setError(err)
+				}
 			}
+			return actionDoneMsg{model: next}
 		}
-		return m.resetNumberBuffer(), nil
 	}
 	if m.enterKey(key) {
 		return m, nil

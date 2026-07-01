@@ -80,7 +80,7 @@ func egressCN(cfg conf.Config, args []string) error {
 
 func egressCustom(cfg conf.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall egress custom add|del|list <CIDR>")
+		return fmt.Errorf("用法: nwall egress custom add|del|list <IP/CIDR...>")
 	}
 	switch args[0] {
 	case "list":
@@ -90,20 +90,28 @@ func egressCustom(cfg conf.Config, args []string) error {
 		return nil
 	case "add":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall egress custom add <CIDR>")
+			return fmt.Errorf("用法: nwall egress custom add <IP/CIDR...>")
 		}
-		cfg.Egress.CustomCIDRs = appendUnique(cfg.Egress.CustomCIDRs, args[1:]...)
-		return saveConfig(cfg, "已添加 egress CIDR: "+strings.Join(args[1:], ", "))
+		cidrs, err := canonicalCIDRArgs(args[1:]...)
+		if err != nil {
+			return err
+		}
+		cfg.Egress.CustomCIDRs = appendUnique(cfg.Egress.CustomCIDRs, cidrs...)
+		return saveConfig(cfg, "已添加 egress CIDR: "+strings.Join(cidrs, ", "))
 	case "del":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall egress custom del <CIDR>")
+			return fmt.Errorf("用法: nwall egress custom del <IP/CIDR...>")
 		}
-		next, err := removeValues(cfg.Egress.CustomCIDRs, args[1:]...)
+		cidrs, err := canonicalCIDRArgs(args[1:]...)
+		if err != nil {
+			return err
+		}
+		next, err := removeValues(cfg.Egress.CustomCIDRs, cidrs...)
 		if err != nil {
 			return err
 		}
 		cfg.Egress.CustomCIDRs = next
-		return saveConfig(cfg, "已删除 egress CIDR: "+strings.Join(args[1:], ", "))
+		return saveConfig(cfg, "已删除 egress CIDR: "+strings.Join(cidrs, ", "))
 	default:
 		return fmt.Errorf("未知 egress custom 子命令: %s", args[0])
 	}

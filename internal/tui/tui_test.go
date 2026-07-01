@@ -75,13 +75,19 @@ type fakeActions struct {
 	applyCalls   int
 	disableCalls int
 	reloadCalls  int
+	applyCfg     conf.Config
+	applyConfirm bool
+	applyTimeout int
 	applyErr     error
 	disableErr   error
 	reloadErr    error
 }
 
-func (f *fakeActions) Apply(conf.Config, bool, int) error {
+func (f *fakeActions) Apply(cfg conf.Config, confirm bool, timeout int) error {
 	f.applyCalls++
+	f.applyCfg = cfg
+	f.applyConfirm = confirm
+	f.applyTimeout = timeout
 	return f.applyErr
 }
 func (f *fakeActions) Disable() error {
@@ -94,6 +100,25 @@ func (f *fakeActions) Reload() error {
 }
 func (f *fakeActions) Status() (daemon.Status, error) {
 	return daemon.Status{OK: true, Components: map[string]daemon.ComponentStatus{}}, nil
+}
+
+func runConfirmY(t *testing.T, m model) model {
+	t.Helper()
+	next, cmd := m.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	pending := next.(model)
+	if cmd == nil || !pending.busy || !strings.Contains(pending.status, "正在执行") {
+		t.Fatalf("confirm should return busy model and command busy=%v status=%q cmd=%v", pending.busy, pending.status, cmd)
+	}
+	msg := cmd()
+	next, cmd = pending.Update(msg)
+	if cmd != nil {
+		t.Fatalf("action done should not return follow-up cmd: %v", cmd)
+	}
+	got := next.(model)
+	if got.busy {
+		t.Fatal("action result should clear busy state")
+	}
+	return got
 }
 
 func TestProvinceSelectionCoversCity(t *testing.T) {
@@ -186,9 +211,8 @@ func TestApplyAndReloadActionsSurfaceState(t *testing.T) {
 	if got.mode != viewConfirm || actions.applyCalls != 0 {
 		t.Fatalf("apply should wait for confirmation mode=%v calls=%d", got.mode, actions.applyCalls)
 	}
-	next, _ = got.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
-	got = next.(model)
-	if actions.applyCalls != 1 || got.err != "" || !strings.Contains(got.status, "已应用规则") {
+	got = runConfirmY(t, got)
+	if actions.applyCalls != 1 || actions.applyConfirm || actions.applyTimeout != 0 || got.err != "" || !strings.Contains(got.status, "已应用当前设置") {
 		t.Fatalf("apply state mismatch calls=%d status=%q err=%q", actions.applyCalls, got.status, got.err)
 	}
 	got.cursor = 3
@@ -196,6 +220,25 @@ func TestApplyAndReloadActionsSurfaceState(t *testing.T) {
 	got = next.(model)
 	if actions.reloadCalls != 1 || got.err != "" || !strings.Contains(got.status, "daemon 已重载") {
 		t.Fatalf("reload state mismatch calls=%d status=%q err=%q", actions.reloadCalls, got.status, got.err)
+	}
+}
+
+func TestApplyCurrentSettingsEnablesProtect(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Protect.Enabled = false
+	actions := &fakeActions{}
+	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus}
+	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	got = runConfirmY(t, got)
+	if actions.applyCalls != 1 || !actions.applyCfg.Protect.Enabled {
+		t.Fatalf("apply should receive enabled config calls=%d cfg=%+v", actions.applyCalls, actions.applyCfg.Protect)
+	}
+	if !store.cfg.Protect.Enabled || !got.cfg.Protect.Enabled {
+		t.Fatalf("protect.enabled should be persisted and kept in model store=%v model=%v", store.cfg.Protect.Enabled, got.cfg.Protect.Enabled)
+	}
+	if got.err != "" || !strings.Contains(got.status, "已应用当前设置") {
+		t.Fatalf("apply status mismatch status=%q err=%q", got.status, got.err)
 	}
 }
 
@@ -221,8 +264,7 @@ func TestApplyActionSurfacesError(t *testing.T) {
 	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus}
 	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
-	next, _ = got.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
-	got = next.(model)
+	got = runConfirmY(t, got)
 	if got.err != "apply failed" {
 		t.Fatalf("expected apply error, got status=%q err=%q", got.status, got.err)
 	}
@@ -294,6 +336,17 @@ func TestParsePortListAllowsEmptyInput(t *testing.T) {
 	}
 }
 
+func TestParseCIDRListCanonicalizesSingleIPs(t *testing.T) {
+	got, err := parseCIDRList("127.0.0.1, 2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"127.0.0.1/32", "2001:db8::1/128"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cidr canonicalization mismatch got=%v want=%v", got, want)
+	}
+}
+
 func TestParsePortListRejectsInvalidRanges(t *testing.T) {
 	for _, raw := range []string{"42000-40000", "0-10", "65535-65536", "abc-def", "1-2-3"} {
 		if _, err := parsePortList(raw); err == nil {
@@ -344,6 +397,57 @@ func TestOpenPortListRejectsOverlapsAndClears(t *testing.T) {
 	got = next.(model)
 	if len(store.cfg.Protect.OpenPortRanges) != 0 || len(store.cfg.Protect.OpenPorts) != 0 {
 		t.Fatalf("clear mismatch ranges=%+v ports=%+v", store.cfg.Protect.OpenPortRanges, store.cfg.Protect.OpenPorts)
+	}
+}
+
+func TestCustomCIDRListAddsEditsAndBatchDeletes(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewIngressCustomCIDRs}
+	next, _ := m.updateIngressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "127.0.0.1,198.51.100.0/24"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want := []string{"127.0.0.1/32", "198.51.100.0/24"}
+	if !reflect.DeepEqual(store.cfg.Ingress.CustomCIDRs, want) {
+		t.Fatalf("ingress cidr add mismatch got=%v want=%v", store.cfg.Ingress.CustomCIDRs, want)
+	}
+
+	got.cursor = 0
+	next, _ = got.updateIngressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	got = next.(model)
+	got.input.value = "2001:db8::1"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want = []string{"198.51.100.0/24", "2001:db8::1/128"}
+	if !reflect.DeepEqual(store.cfg.Ingress.CustomCIDRs, want) {
+		t.Fatalf("ingress cidr edit mismatch got=%v want=%v", store.cfg.Ingress.CustomCIDRs, want)
+	}
+
+	next, _ = got.updateIngressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	got.input.value = "1-2"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(store.cfg.Ingress.CustomCIDRs) != 0 {
+		t.Fatalf("ingress cidr batch delete mismatch: %v", store.cfg.Ingress.CustomCIDRs)
+	}
+}
+
+func TestEgressCustomCIDRListAddsAndClears(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewEgressCustomCIDRs}
+	next, _ := m.updateEgressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "127.0.0.1 2001:db8::1"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want := []string{"127.0.0.1/32", "2001:db8::1/128"}
+	if !reflect.DeepEqual(store.cfg.Egress.CustomCIDRs, want) {
+		t.Fatalf("egress cidr add mismatch got=%v want=%v", store.cfg.Egress.CustomCIDRs, want)
+	}
+	next, _ = got.updateEgressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if len(store.cfg.Egress.CustomCIDRs) != 0 {
+		t.Fatalf("egress cidr clear mismatch: %v", store.cfg.Egress.CustomCIDRs)
 	}
 }
 

@@ -87,20 +87,33 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch idx {
 	case 0:
-		return m.confirmAction("确认应用防护规则", fmt.Sprintf("将写入防护规则并启动 %d 秒回滚倒计时。输入 Y 确认执行。", m.cfg.Protect.RollbackTimeoutSec), "Y 确认应用 • 其它键取消 • 0/Esc 返回", viewStatus, func(m *model) error {
+		return m.confirmAction("确认应用当前设置", fmt.Sprintf("将开启防护总开关、写入规则并启动 %d 秒回滚倒计时。输入 Y 确认执行。", m.cfg.Protect.RollbackTimeoutSec), "Y 执行应用 • 其它键取消 • 0/Esc 返回", viewStatus, func(m *model) error {
+			if !m.cfg.Protect.Enabled {
+				m.cfg.Protect.Enabled = true
+				if err := m.db.SaveConfig(m.cfg); err != nil {
+					return err
+				}
+			}
 			if err := m.actions.Apply(m.cfg, false, 0); err != nil {
 				return err
 			}
-			m.status = fmt.Sprintf("已应用规则；请在 %d 秒内确认，避免自动回滚", m.cfg.Protect.RollbackTimeoutSec)
+			m.status = fmt.Sprintf("已应用当前设置；请在 %d 秒内执行“应用并确认当前设置”，避免自动回滚", m.cfg.Protect.RollbackTimeoutSec)
 			m.err = ""
 			return nil
 		}), nil
 	case 1:
+		if !m.cfg.Protect.Enabled {
+			m.cfg.Protect.Enabled = true
+			if err := m.db.SaveConfig(m.cfg); err != nil {
+				m.setError(err)
+				return m, nil
+			}
+		}
 		if err := m.actions.Apply(m.cfg, true, 0); err != nil {
 			m.setError(err)
 			return m, nil
 		}
-		m.status = "已应用并确认"
+		m.status = "已应用并确认当前设置"
 		m.err = ""
 	case 2:
 		if err := m.actions.Disable(); err != nil {
@@ -142,10 +155,10 @@ func (m *model) refreshStatus() error {
 
 func (m model) viewStatus() string {
 	rows := []row{
-		{text: "应用防护规则", hint: "需要输入 Y 确认", detail: "Enter 后进入确认；写入规则并启动回滚倒计时，超时未确认会回滚。"},
-		{text: "确认当前规则", hint: "不启动回滚倒计时", detail: "Enter 直接执行 apply --confirm；用于确认当前规则已经可用。"},
+		{text: "应用当前设置", hint: "开启防护并启动回滚", detail: "Enter 后进入确认；写入当前 DB 配置并启动回滚倒计时，超时未确认会回滚。"},
+		{text: "应用并确认当前设置", hint: "跳过回滚倒计时", detail: "Enter 直接执行 apply --confirm；用于确认当前设置已经可用。"},
 		{text: "停用防护规则", hint: "删除规则并关闭 protect.enabled", detail: "Enter 直接删除已应用规则，并把 protect.enabled=false 写入 DB。"},
-		{text: "重载 daemon", hint: "重新读取 DB", detail: "Enter 让 daemon 重读 DB 并重启长期组件；不会替代应用防护规则。"},
+		{text: "重载 daemon", hint: "重启长期组件", detail: "Enter 让 daemon 重读 DB 并重启 DPI、租约、token 触发器和下行伪装；不是应用规则的替代。"},
 		{text: "刷新状态", hint: "读取 daemon 状态", detail: "Enter 刷新 daemon 和下行伪装状态快照。"},
 	}
 	var b strings.Builder

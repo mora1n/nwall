@@ -8,7 +8,7 @@ func TestApplyFallbacks(t *testing.T) {
 	if cfg.Protect.RollbackTimeoutSec != 10 {
 		t.Errorf("rollback_timeout_sec 应回落 10，得 %d", cfg.Protect.RollbackTimeoutSec)
 	}
-	if cfg.Lease.ListenPort != 18080 || cfg.Lease.TSWindowSec != 60 {
+	if cfg.Lease.ListenPort != 18080 || cfg.Lease.IdleTTL != "3d" || cfg.Lease.TSWindowSec != 60 {
 		t.Errorf("lease 默认值回落失败: %+v", cfg.Lease)
 	}
 }

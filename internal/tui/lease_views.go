@@ -52,7 +52,7 @@ func (m model) updateLease(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新 TCP 租约 key")
 		}), nil
 	case 2:
-		return m.prompt("默认租约时长", m.cfg.Lease.IdleTTL, "例如 10m、1h、3d", func(m *model, raw string) error {
+		return m.prompt("默认租约时长", m.cfg.Lease.IdleTTL, "例如 3d、1h、10m", func(m *model, raw string) error {
 			if err := validateTTL(raw); err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func (m model) viewLease() string {
 		{text: fmt.Sprintf("签名时间窗: %d 秒", m.cfg.Lease.TSWindowSec), hint: "e 编辑"},
 		{text: "可信 relay: " + countSummary(len(m.cfg.Lease.TrustedRelayCIDRs)), hint: "e 编辑"},
 		{text: "租约路由: " + countSummary(len(m.cfg.Lease.Routes)), hint: "进入列表"},
-		{text: "token 触发器", hint: fmt.Sprintf("%s routes=%d", formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), len(m.cfg.LeaseTrigger.Routes))},
+		{text: "token 触发器", hint: fmt.Sprintf("%s routes=%d", formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), len(m.cfg.LeaseTrigger.Routes)), detail: "公网 HTTP token 请求会转成安装机 TCP 租约。"},
 	}
 	return m.renderRows("TCP 租约", rows, "Enter/e 编辑或进入 • 0/Esc 返回 • q 退出")
 }
@@ -242,7 +242,7 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "a":
-		return m.prompt("新增 token 路由", "", "格式: <token> <label> <target-host:port> <ttl> <v4:24-32> <v6:128>", func(m *model, raw string) error {
+		return m.prompt("新增 token 路由", "", "格式: <token> <label> <target-host:port> <ttl> <v4:24-32> <v6:128>；target 是安装机 TCP 租约服务端", func(m *model, raw string) error {
 			route, err := parseTriggerRoute(raw)
 			if err != nil {
 				return err
@@ -268,7 +268,7 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		route := m.cfg.LeaseTrigger.Routes[m.cursor]
-		return m.prompt("编辑 token 路由", formatTriggerRoute(route), "格式: <token> <label> <target-host:port> <ttl> <v4:24-32> <v6:128>", func(m *model, raw string) error {
+		return m.prompt("编辑 token 路由", formatTriggerRoute(route), "格式: <token> <label> <target-host:port> <ttl> <v4:24-32> <v6:128>；target 是安装机 TCP 租约服务端", func(m *model, raw string) error {
 			next, err := parseTriggerRoute(raw)
 			if err != nil {
 				return err
@@ -289,14 +289,16 @@ func (m model) viewLeaseTriggerRoutes() string {
 	rows := make([]row, 0, len(m.cfg.LeaseTrigger.Routes))
 	for _, route := range m.cfg.LeaseTrigger.Routes {
 		rows = append(rows, row{
-			text: fmt.Sprintf("%s  %s -> %s", valueOrDash(route.Token), route.Label, route.Target),
-			hint: fmt.Sprintf("ttl=%s v4/%d v6/%d", valueOr(route.IdleTTL, m.cfg.Lease.IdleTTL), routeV4Len(route.IPv4PrefixLen), routeV6Len(route.IPv6PrefixLen)),
+			text:   fmt.Sprintf("%s  %s -> %s", valueOrDash(route.Token), route.Label, route.Target),
+			hint:   fmt.Sprintf("ttl=%s v4/%d v6/%d", valueOr(route.IdleTTL, m.cfg.Lease.IdleTTL), routeV4Len(route.IPv4PrefixLen), routeV6Len(route.IPv6PrefixLen)),
+			detail: "访问 /<token> 生成 TCP 租约；?mask=32 可把 IPv4 从默认 /24 改为单 IP。",
 		})
 	}
 	if len(rows) == 0 {
 		rows = []row{{text: "暂无 token 路由", hint: "按 a 新增"}}
 	}
-	return m.renderRows("TCP 租约 / token 路由", rows, "a 新增 • e/Enter 编辑 • d 删除 • 0/Esc 返回")
+	intro := "token 路由把公网 HTTP token 请求转发到安装机 TCP 租约服务端；默认按来源 IPv4 /24 放行。"
+	return m.renderRowsWithIntro("TCP 租约 / token 路由", rows, intro, "a 新增 • e/Enter 编辑 • d 删除 • 0/Esc 返回")
 }
 
 func upsertRoute(routes []conf.Route, route conf.Route) []conf.Route {

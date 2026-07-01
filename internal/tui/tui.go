@@ -47,8 +47,10 @@ const (
 	viewProtect
 	viewOpenPorts
 	viewIngress
+	viewIngressCustomCIDRs
 	viewIngressPorts
 	viewEgress
+	viewEgressCustomCIDRs
 	viewEgressRegions
 	viewDPI
 	viewLease
@@ -134,6 +136,7 @@ type model struct {
 	numAt      time.Time
 	status     string
 	err        string
+	busy       bool
 }
 
 // Run starts the interactive TUI.
@@ -157,12 +160,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
+	case actionDoneMsg:
+		return msg.model, nil
 	default:
 		return m, nil
 	}
 }
 
 func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.busy {
+		if quit, cmd := shouldQuit(key); quit {
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch m.mode {
 	case viewHome:
 		return m.updateHome(key)
@@ -174,10 +185,14 @@ func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateOpenPorts(key)
 	case viewIngress:
 		return m.updateIngress(key)
+	case viewIngressCustomCIDRs:
+		return m.updateIngressCustomCIDRs(key)
 	case viewIngressPorts:
 		return m.updateIngressPorts(key)
 	case viewEgress:
 		return m.updateEgress(key)
+	case viewEgressCustomCIDRs:
+		return m.updateEgressCustomCIDRs(key)
 	case viewEgressRegions:
 		return m.updateEgressRegions(key)
 	case viewDPI:
@@ -229,10 +244,14 @@ func (m model) View() string {
 		return frame(m.viewOpenPorts())
 	case viewIngress:
 		return frame(m.viewIngress())
+	case viewIngressCustomCIDRs:
+		return frame(m.viewIngressCustomCIDRs())
 	case viewIngressPorts:
 		return frame(m.viewIngressPorts())
 	case viewEgress:
 		return frame(m.viewEgress())
+	case viewEgressCustomCIDRs:
+		return frame(m.viewEgressCustomCIDRs())
 	case viewEgressRegions:
 		return frame(m.viewEgressRegions())
 	case viewDPI:

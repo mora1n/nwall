@@ -57,6 +57,21 @@ func TestRenderOpenPortsElements(t *testing.T) {
 	}
 }
 
+func TestRenderOpenPort40422IsAccepted(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Protect.OpenPorts = []int{40422}
+	out := Render(Input{Cfg: cfg})
+	for _, must := range []string{
+		"elements = { 40422 }",
+		"tcp dport @open_ports accept",
+		"udp dport @open_ports accept",
+	} {
+		if !strings.Contains(out, must) {
+			t.Fatalf("40422 公开端口渲染缺少 %q\n%s", must, out)
+		}
+	}
+}
+
 func TestRenderPortIntervals(t *testing.T) {
 	cfg := conf.Default()
 	cfg.Protect.OpenPorts = []int{40000, 40001, 40002, 50000}
@@ -138,6 +153,13 @@ func TestRenderEgressAndDPI(t *testing.T) {
 	ingress := between(t, out, "\tchain ingress {\n", "\t}\n")
 	if strings.Contains(ingress, "\t\tct state established,related accept\n") {
 		t.Errorf("DPI 开启时不应无条件放行 established，否则会绕过首个应用层 payload\n%s", out)
+	}
+}
+
+func TestRenderLeaseTimeoutDefaultsTo3d(t *testing.T) {
+	out := Render(Input{Cfg: conf.Default()})
+	if !strings.Contains(out, "timeout 3d") {
+		t.Fatalf("租约 timeout 默认应为 3d\n%s", out)
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,7 +121,7 @@ func ingressCity(cfg conf.Config, args []string) error {
 
 func ingressCustom(cfg conf.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall ingress custom add|del|list <CIDR>")
+		return fmt.Errorf("用法: nwall ingress custom add|del|list <IP/CIDR...>")
 	}
 	switch args[0] {
 	case "list":
@@ -130,20 +131,28 @@ func ingressCustom(cfg conf.Config, args []string) error {
 		return nil
 	case "add":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall ingress custom add <CIDR>")
+			return fmt.Errorf("用法: nwall ingress custom add <IP/CIDR...>")
 		}
-		cfg.Ingress.CustomCIDRs = append(cfg.Ingress.CustomCIDRs, args[1])
-		return saveIngress(cfg, "已添加自定义 CIDR: "+args[1])
+		cidrs, err := canonicalCIDRArgs(args[1:]...)
+		if err != nil {
+			return err
+		}
+		cfg.Ingress.CustomCIDRs = appendUnique(cfg.Ingress.CustomCIDRs, cidrs...)
+		return saveIngress(cfg, "已添加自定义 CIDR: "+strings.Join(cidrs, ", "))
 	case "del":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall ingress custom del <CIDR>")
+			return fmt.Errorf("用法: nwall ingress custom del <IP/CIDR...>")
 		}
-		out, err := removeValues(cfg.Ingress.CustomCIDRs, args[1])
+		cidrs, err := canonicalCIDRArgs(args[1:]...)
 		if err != nil {
-			return fmt.Errorf("未找到 CIDR: %s", args[1])
+			return err
+		}
+		out, err := removeValues(cfg.Ingress.CustomCIDRs, cidrs...)
+		if err != nil {
+			return fmt.Errorf("未找到 CIDR: %s", strings.Join(cidrs, ", "))
 		}
 		cfg.Ingress.CustomCIDRs = out
-		return saveIngress(cfg, "已删除自定义 CIDR: "+args[1])
+		return saveIngress(cfg, "已删除自定义 CIDR: "+strings.Join(cidrs, ", "))
 	default:
 		return fmt.Errorf("未知 custom 子命令: %s", args[0])
 	}
@@ -372,6 +381,34 @@ func appendUnique(values []string, additions ...string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func canonicalCIDRArgs(values ...string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		cidr, err := canonicalCIDR(value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cidr)
+	}
+	return appendUnique(nil, out...), nil
+}
+
+func canonicalCIDR(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if p, err := netip.ParsePrefix(value); err == nil {
+		return p.Masked().String(), nil
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return "", fmt.Errorf("无效 IP/CIDR: %s", raw)
+	}
+	bits := 32
+	if addr.Is6() {
+		bits = 128
+	}
+	return netip.PrefixFrom(addr, bits).String(), nil
 }
 
 func removeValues(values []string, removals ...string) ([]string, error) {

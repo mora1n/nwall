@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,8 +65,11 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err := Run([]string{"protect", "config", "set", "--clear-open-ports", "--open-port", "2222", "--open-port", "19082", "--guard-all", "true"}); err != nil {
 		t.Fatalf("protect config set: %v", err)
 	}
-	if err := Run([]string{"egress", "custom", "add", "198.51.100.0/24"}); err != nil {
+	if err := Run([]string{"egress", "custom", "add", "198.51.100.1"}); err != nil {
 		t.Fatalf("egress custom add: %v", err)
+	}
+	if err := Run([]string{"ingress", "custom", "add", "203.0.113.9", "2001:db8::1"}); err != nil {
+		t.Fatalf("ingress custom add: %v", err)
 	}
 	if err := Run([]string{"lease", "server", "set", "--lease-key", "secret", "--listen", "127.0.0.1:18090", "--trusted-relay", "198.51.100.0/24"}); err != nil {
 		t.Fatalf("lease server set: %v", err)
@@ -93,8 +97,12 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !got.Egress.Enabled || len(got.Egress.CustomCIDRs) != 1 {
+	if !got.Egress.Enabled || len(got.Egress.CustomCIDRs) != 1 || got.Egress.CustomCIDRs[0] != "198.51.100.1/32" {
 		t.Fatalf("egress 未写入: %+v", got.Egress)
+	}
+	wantIngressCIDRs := []string{"2001:db8::1/128", "203.0.113.9/32"}
+	if !reflect.DeepEqual(got.Ingress.CustomCIDRs, wantIngressCIDRs) {
+		t.Fatalf("ingress custom CIDR 未规范写入: got=%v want=%v", got.Ingress.CustomCIDRs, wantIngressCIDRs)
 	}
 	if len(got.Protect.OpenPorts) != 2 || got.Protect.OpenPorts[0] != 2222 || got.Protect.OpenPorts[1] != 19082 || !got.Protect.GuardAll {
 		t.Fatalf("protect config 未写入: %+v", got.Protect)

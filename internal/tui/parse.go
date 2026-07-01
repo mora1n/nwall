@@ -120,12 +120,21 @@ func parseCIDRList(raw string) ([]string, error) {
 	values := splitCSV(raw)
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if _, err := parseCIDRLike(value); err != nil {
+		cidr, err := parseCIDRLike(value)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, value)
+		out = append(out, cidr)
 	}
 	return uniqueSorted(out), nil
+}
+
+func parseSingleCIDR(raw string) (string, error) {
+	values := splitCSV(raw)
+	if len(values) != 1 {
+		return "", fmt.Errorf("请输入单个 IP/CIDR")
+	}
+	return parseCIDRLike(values[0])
 }
 
 func parsePrefixList(raw string) ([]string, error) {
@@ -302,6 +311,21 @@ func removePortRangesByIndex(ranges []conf.PortRange, indexes map[int]struct{}) 
 		out = append(out, r)
 	}
 	return out
+}
+
+func removeStringsByIndex(values []string, indexes map[int]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for i, value := range values {
+		if _, remove := indexes[i]; remove {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func appendCIDRUnique(values []string, additions ...string) []string {
+	return uniqueSorted(append(append([]string(nil), values...), additions...))
 }
 
 func splitHostPort(raw string) (string, int, error) {

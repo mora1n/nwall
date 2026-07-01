@@ -67,7 +67,7 @@ func leaseConfig(args []string) error {
 	fs := flag.NewFlagSet("lease server set", flag.ContinueOnError)
 	listen := fs.String("listen", "", "监听地址 HOST:PORT")
 	leaseKey := fs.String("lease-key", "", "TCP 租约共享 key，可用 nwall lease keygen 生成")
-	idleTTL := fs.String("idle-ttl", "", "默认租约时长，如 10m")
+	idleTTL := fs.String("idle-ttl", "", "默认租约时长，如 3d")
 	tsWindow := fs.Int("ts-window-sec", 0, "签名时间窗秒数")
 	var trustedRelay multiFlag
 	fs.Var(&trustedRelay, "trusted-relay", "可信 TCP relay CIDR，可重复")
@@ -284,7 +284,7 @@ func leaseRoute(args []string) error {
 
 func leaseRouteAdd(cfg conf.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall lease route add <label> [--idle-ttl 10m] [--ipv4-prefix-len 24] [--ipv6-prefix-len 128] [--allow CIDR]")
+		return fmt.Errorf("用法: nwall lease route add <label> [--idle-ttl 3d] [--ipv4-prefix-len 24] [--ipv6-prefix-len 128] [--allow CIDR]")
 	}
 	label := args[0]
 	fs := flag.NewFlagSet("lease route add", flag.ContinueOnError)

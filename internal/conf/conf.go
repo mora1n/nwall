@@ -112,7 +112,7 @@ func Default() Config {
 		Lease: Lease{
 			ListenHost:  "127.0.0.1",
 			ListenPort:  18080,
-			IdleTTL:     "10m",
+			IdleTTL:     "3d",
 			TSWindowSec: 60,
 		},
 		LeaseTrigger: LeaseTrigger{
