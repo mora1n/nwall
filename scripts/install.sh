@@ -9,7 +9,11 @@ SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 DRY_RUN=0
 CLEANUP_DIR=""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_PATH" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+fi
 
 usage() {
   cat <<'EOF'
@@ -100,7 +104,7 @@ verify_release_checksum() {
     name="${name#\*}"
     if [[ "$name" == "$asset" ]]; then
       printf '%s  %s\n' "$hash" "$asset" > "$entry"
-      (cd "$tmpdir" && sha256sum -c "$asset.sha256")
+      (cd "$tmpdir" && sha256sum -c "$asset.sha256" >&2)
       return 0
     fi
   done < "$checksums"
@@ -181,7 +185,7 @@ main() {
   local src_dir="$SCRIPT_DIR"
   local tmpdir=""
   trap '[[ -n "${CLEANUP_DIR:-}" ]] && rm -rf "$CLEANUP_DIR"' EXIT
-  if [[ ! -x "$src_dir/nwall" ]]; then
+  if [[ -z "$src_dir" || ! -x "$src_dir/nwall" ]]; then
     local version
     if [[ "$DRY_RUN" == 1 && "$VERSION" == "latest" ]]; then
       version="latest"
