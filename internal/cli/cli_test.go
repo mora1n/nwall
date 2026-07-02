@@ -13,6 +13,7 @@ import (
 	"github.com/mora1n/nwall/internal/conf"
 	"github.com/mora1n/nwall/internal/geo"
 	"github.com/mora1n/nwall/internal/store"
+	appversion "github.com/mora1n/nwall/internal/version"
 )
 
 func TestIngressCityAndPortCommandsUpdateConfig(t *testing.T) {
@@ -268,6 +269,54 @@ func TestUninstallDryRun(t *testing.T) {
 		if strings.Contains(got, legacy) {
 			t.Fatalf("uninstall dry-run should not touch legacy unit %q:\n%s", legacy, got)
 		}
+	}
+}
+
+func TestUpdateSkipsWhenCurrentVersionMatchesTarget(t *testing.T) {
+	oldVersion := appversion.Version
+	appversion.Version = "v1.2.3"
+	defer func() {
+		appversion.Version = oldVersion
+	}()
+	stdout, restore := captureStdout(t)
+	defer restore()
+	dir := t.TempDir()
+	err := update(adminOptions{
+		Version:    "v1.2.3",
+		Prefix:     filepath.Join(dir, "prefix"),
+		SystemdDir: filepath.Join(dir, "systemd"),
+		Repo:       defaultRepo,
+	})
+	if err != nil {
+		t.Fatalf("update same version: %v", err)
+	}
+	got := stdout()
+	if !strings.Contains(got, "nwall already at v1.2.3") {
+		t.Fatalf("same-version update should report already-at:\n%s", got)
+	}
+	if strings.Contains(got, "nwall updated to") {
+		t.Fatalf("same-version update should not report updated:\n%s", got)
+	}
+}
+
+func TestShouldSkipUpdate(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		target  string
+		want    bool
+	}{
+		{name: "same release", current: "v1.2.3", target: "v1.2.3", want: true},
+		{name: "different release", current: "v1.2.2", target: "v1.2.3", want: false},
+		{name: "dev build", current: "dev", target: "v1.2.3", want: false},
+		{name: "empty build version", current: "", target: "v1.2.3", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSkipUpdate(tt.current, tt.target); got != tt.want {
+				t.Fatalf("shouldSkipUpdate(%q, %q)=%v want %v", tt.current, tt.target, got, tt.want)
+			}
+		})
 	}
 }
 

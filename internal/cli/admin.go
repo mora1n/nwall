@@ -17,6 +17,7 @@ import (
 
 	"github.com/mora1n/nwall/internal/protect"
 	"github.com/mora1n/nwall/internal/store"
+	appversion "github.com/mora1n/nwall/internal/version"
 )
 
 const (
@@ -165,6 +166,10 @@ func update(opts adminOptions) error {
 			return err
 		}
 	}
+	if shouldSkipUpdate(appversion.Version, version) {
+		fmt.Printf("nwall already at %s\n", version)
+		return nil
+	}
 	tmpDir, err := os.MkdirTemp("", "nwall-update-*")
 	if err != nil {
 		return err
@@ -202,6 +207,10 @@ func update(opts adminOptions) error {
 	}
 	fmt.Printf("nwall updated to %s\n", version)
 	return nil
+}
+
+func shouldSkipUpdate(current, target string) bool {
+	return current != "" && current != "dev" && current == target
 }
 
 func dryRunUpdate(opts adminOptions, version string) {
