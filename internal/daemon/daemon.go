@@ -323,6 +323,54 @@ func (s *Server) snapshot() Status {
 	}
 }
 
+func (s *Server) snapshotWithConfig() (Status, error) {
+	status := s.snapshot()
+	dbPath := s.cfg.DBPath
+	if strings.TrimSpace(dbPath) == "" {
+		dbPath = store.DefaultPath
+	}
+	db, err := store.Open(dbPath)
+	if err != nil {
+		return status, err
+	}
+	defer db.Close()
+	cfg, err := db.LoadConfig()
+	if err != nil {
+		return status, err
+	}
+	status.reconcileConfig(cfg)
+	return status, nil
+}
+
+func (status *Status) reconcileConfig(cfg conf.Config) {
+	if status.Components == nil {
+		status.Components = map[string]ComponentStatus{}
+	}
+	if !cfg.Protect.Enabled {
+		current, ok := status.Components["protect"]
+		if ok && current.State == "disabled" && current.Message == "protect.enabled=false" && current.Error == "" {
+			status.recomputeOK()
+			return
+		}
+		status.Components["protect"] = ComponentStatus{
+			State:     "disabled",
+			Message:   "protect.enabled=false",
+			UpdatedAt: nowISO(),
+		}
+	}
+	status.recomputeOK()
+}
+
+func (status *Status) recomputeOK() {
+	status.OK = true
+	for _, c := range status.Components {
+		if c.State == "error" {
+			status.OK = false
+			return
+		}
+	}
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -336,7 +384,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, s.snapshot())
+	status, err := s.snapshotWithConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, status)
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {

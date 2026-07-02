@@ -121,6 +121,10 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 			return m, nil
 		}
+		if err := m.requireProtectState("running"); err != nil {
+			m.setError(err)
+			return m, nil
+		}
 		m.status = "已应用并确认当前设置"
 		m.err = ""
 	case 2:
@@ -133,6 +137,20 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 			return m, nil
 		}
+		if err := m.actions.Reload(); err != nil {
+			m.setError(err)
+			return m, nil
+		}
+		if err := m.refreshStatus(); err != nil {
+			m.setError(err)
+			return m, nil
+		}
+		if err := m.requireProtectState("disabled"); err != nil {
+			m.setError(err)
+			return m, nil
+		}
+		m.status = "已停用防护规则"
+		m.err = ""
 	case 3:
 		if err := m.refreshStatus(); err != nil {
 			m.setError(err)
@@ -154,11 +172,31 @@ func (m *model) refreshStatus() error {
 	return m.loadPersistent()
 }
 
+func (m model) requireProtectState(want string) error {
+	if !m.hasDaemonStatus {
+		return fmt.Errorf("daemon 状态未刷新")
+	}
+	c, ok := m.daemonStatus.Components["protect"]
+	if !ok {
+		return fmt.Errorf("daemon status 缺少 protect 组件")
+	}
+	if c.State == want {
+		return nil
+	}
+	if c.Error != "" {
+		return fmt.Errorf("daemon protect 状态为 %s: %s", c.State, c.Error)
+	}
+	if c.Message != "" {
+		return fmt.Errorf("daemon protect 状态为 %s: %s", c.State, c.Message)
+	}
+	return fmt.Errorf("daemon protect 状态为 %s，期望 %s", c.State, want)
+}
+
 func (m model) viewStatus() string {
 	rows := []row{
 		{text: "应用当前设置", hint: "开启防护并启动回滚", detail: "Enter 后进入确认；写入当前 DB 配置并启动回滚倒计时，超时未确认会回滚。"},
 		{text: "应用并确认当前设置", hint: "应用规则、确认并重启组件", detail: "Enter 直接执行 apply --confirm，然后让 daemon 重读 DB 并重启长期组件。"},
-		{text: "停用防护规则", hint: "删除规则并关闭 protect.enabled", detail: "Enter 直接删除已应用规则，并把 protect.enabled=false 写入 DB。"},
+		{text: "停用防护规则", hint: "删除规则、关闭总开关并重载 daemon", detail: "Enter 直接删除已应用规则，把 protect.enabled=false 写入 DB，并让 daemon 重读 DB。"},
 		{text: "刷新状态", hint: "读取 daemon 状态", detail: "Enter 刷新 daemon 和下行伪装状态快照。"},
 	}
 	var b strings.Builder

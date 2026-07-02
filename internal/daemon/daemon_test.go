@@ -68,6 +68,39 @@ func TestDaemonHealthStatusReload(t *testing.T) {
 	}
 }
 
+func TestSnapshotReconcilesProtectDisabledFromDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "nwall.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		cfg:       Config{DBPath: dbPath},
+		startedAt: nowISO(),
+		components: map[string]ComponentStatus{
+			"protect": {
+				State:     "running",
+				Message:   "规则已应用",
+				UpdatedAt: nowISO(),
+			},
+		},
+	}
+	status, err := s.snapshotWithConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	protect := status.Components["protect"]
+	if protect.State != "disabled" || protect.Message != "protect.enabled=false" {
+		t.Fatalf("protect status should follow DB disabled state: %+v", protect)
+	}
+	if !status.OK {
+		t.Fatalf("disabled protect should not mark status unhealthy: %+v", status)
+	}
+}
+
 func unixHTTPClient(socketPath string) *http.Client {
 	return &http.Client{
 		Timeout: 2 * time.Second,

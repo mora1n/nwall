@@ -71,7 +71,7 @@ func (m model) viewProtect() string {
 		{text: "防护: " + plainOnOff(m.cfg.Protect.Enabled), hint: "总开关"},
 		{text: "保护所有端口: " + plainOnOff(m.cfg.Protect.GuardAll), hint: "关闭后只保护 guarded_ports"},
 		{text: fmt.Sprintf("默认回滚: %d 秒", m.cfg.Protect.RollbackTimeoutSec), hint: "e 编辑"},
-		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "直接公开放行，不受白名单限制"},
+		{text: "公开端口: " + portRangesSummary(m.cfg.Protect.OpenPortRanges), hint: "本机填监听端口；DNAT 填公网原始入口端口"},
 		{text: "受保护端口: " + portListSummary(m.cfg.Protect.GuardedPorts), hint: "guard_all=false 时只保护这些端口"},
 	}
 	return m.renderRows("防护", rows, "Enter/l 切换/进入 • e 编辑 • h/0/Esc 返回 • q 退出")
@@ -89,7 +89,7 @@ func (m model) updateOpenPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "a":
-		return m.prompt("新增公开端口", "", "逗号分隔端口或范围；例如 40000-42000,50000", func(m *model, raw string) error {
+		return m.prompt("新增公开端口", "", "本机服务填监听端口；DNAT/forward 填公网原始入口端口；例如 40422,41423,40000-42000", func(m *model, raw string) error {
 			ranges, err := parsePortRanges(raw)
 			if err != nil {
 				return err
@@ -140,7 +140,7 @@ func (m model) viewOpenPorts() string {
 		rows = append(rows, row{
 			text:   formatPortRange(r),
 			hint:   "公开放行",
-			detail: "该端口项会先于入站白名单放行。",
+			detail: "本机流量按 tcp/udp dport 放行；DNAT/forward 按公网原始入口端口放行。",
 		})
 	}
 	if len(rows) == 0 {

@@ -81,6 +81,8 @@ type fakeActions struct {
 	applyErr     error
 	disableErr   error
 	reloadErr    error
+	status       daemon.Status
+	statusErr    error
 }
 
 func (f *fakeActions) Apply(cfg conf.Config, confirm bool, timeout int) error {
@@ -99,7 +101,12 @@ func (f *fakeActions) Reload() error {
 	return f.reloadErr
 }
 func (f *fakeActions) Status() (daemon.Status, error) {
-	return daemon.Status{OK: true, Components: map[string]daemon.ComponentStatus{}}, nil
+	if f.status.Components != nil || f.status.StartedAt != "" || f.status.ReloadedAt != "" {
+		return f.status, f.statusErr
+	}
+	return daemon.Status{OK: true, Components: map[string]daemon.ComponentStatus{
+		"protect": {State: "running"},
+	}}, f.statusErr
 }
 
 func runConfirmY(t *testing.T, m model) model {
@@ -254,18 +261,40 @@ func TestApplyCurrentSettingsEnablesProtect(t *testing.T) {
 	}
 }
 
+func TestApplyConfirmRejectsUnexpectedProtectStatus(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Protect.Enabled = true
+	actions := &fakeActions{status: daemon.Status{OK: true, Components: map[string]daemon.ComponentStatus{
+		"protect": {State: "disabled", Message: "protect.enabled=false"},
+	}}}
+	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus, cursor: 1}
+	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if actions.applyCalls != 1 || actions.reloadCalls != 1 {
+		t.Fatalf("apply confirm should apply and reload calls=%d reloads=%d", actions.applyCalls, actions.reloadCalls)
+	}
+	if got.err == "" || !strings.Contains(got.err, "daemon protect 状态为 disabled") {
+		t.Fatalf("expected protect state error, got status=%q err=%q", got.status, got.err)
+	}
+}
+
 func TestDisableActionUpdatesConfig(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	store.cfg.Protect.Enabled = true
-	actions := &fakeActions{}
+	actions := &fakeActions{status: daemon.Status{OK: true, Components: map[string]daemon.ComponentStatus{
+		"protect": {State: "disabled"},
+	}}}
 	m := model{db: store, actions: actions, cfg: store.cfg, mode: viewStatus, cursor: 2}
 	next, _ := m.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
-	if actions.disableCalls != 1 || got.err != "" {
-		t.Fatalf("disable state mismatch calls=%d status=%q err=%q", actions.disableCalls, got.status, got.err)
+	if actions.disableCalls != 1 || actions.reloadCalls != 1 || got.err != "" {
+		t.Fatalf("disable state mismatch disableCalls=%d reloadCalls=%d status=%q err=%q", actions.disableCalls, actions.reloadCalls, got.status, got.err)
 	}
 	if store.cfg.Protect.Enabled {
 		t.Fatal("disable should persist protect.enabled=false")
+	}
+	if !got.hasDaemonStatus || got.daemonStatus.Components["protect"].State != "disabled" {
+		t.Fatalf("disable should refresh daemon protect state: %+v", got.daemonStatus.Components["protect"])
 	}
 }
 
@@ -467,6 +496,15 @@ func TestListEntryHintsDescribePurpose(t *testing.T) {
 	} {
 		if !strings.Contains(ingress, want) {
 			t.Fatalf("ingress hint missing %q:\n%s", want, ingress)
+		}
+	}
+	protect := m.viewProtect()
+	for _, want := range []string{
+		"DNAT",
+		"公网原始入口端口",
+	} {
+		if !strings.Contains(protect, want) {
+			t.Fatalf("protect hint missing %q:\n%s", want, protect)
 		}
 	}
 }
