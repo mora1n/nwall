@@ -274,7 +274,7 @@ func TestUninstallDryRun(t *testing.T) {
 
 func TestUpdateSkipsWhenCurrentVersionMatchesTarget(t *testing.T) {
 	oldVersion := appversion.Version
-	appversion.Version = "v1.2.3"
+	appversion.Version = "1.2.3"
 	defer func() {
 		appversion.Version = oldVersion
 	}()
@@ -307,6 +307,8 @@ func TestShouldSkipUpdate(t *testing.T) {
 		want    bool
 	}{
 		{name: "same release", current: "v1.2.3", target: "v1.2.3", want: true},
+		{name: "packaged version omits v", current: "1.2.3", target: "v1.2.3", want: true},
+		{name: "target omits v", current: "v1.2.3", target: "1.2.3", want: true},
 		{name: "different release", current: "v1.2.2", target: "v1.2.3", want: false},
 		{name: "dev build", current: "dev", target: "v1.2.3", want: false},
 		{name: "empty build version", current: "", target: "v1.2.3", want: false},

@@ -210,7 +210,13 @@ func update(opts adminOptions) error {
 }
 
 func shouldSkipUpdate(current, target string) bool {
+	current = normalizeReleaseVersion(current)
+	target = normalizeReleaseVersion(target)
 	return current != "" && current != "dev" && current == target
+}
+
+func normalizeReleaseVersion(value string) string {
+	return strings.TrimPrefix(strings.TrimSpace(value), "v")
 }
 
 func dryRunUpdate(opts adminOptions, version string) {
