@@ -183,6 +183,13 @@ func TestTriggerUsesTrustedProxyHeader(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK || resp.LeaseCIDR != "203.0.113.0/24" {
+		t.Fatalf("token 响应应包含 ok=true 和 lease_cidr，got=%+v", resp)
+	}
 	if got.Target != "198.51.100.7:19082" || got.Label != "office" || got.SourceIP != "203.0.113.9" || got.Mask != "24" || got.IdleTTL != "3d" || got.Key != "secret" {
 		t.Fatalf("send opts 不符: %+v", got)
 	}
@@ -203,6 +210,13 @@ func TestTriggerMaskOverride(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp Response
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK || resp.LeaseCIDR != "203.0.113.9/32" {
+		t.Fatalf("mask=32 token 响应不符: %+v", resp)
 	}
 	if gotMask != "32" {
 		t.Fatalf("mask 覆盖不符: %q", gotMask)

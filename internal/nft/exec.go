@@ -8,7 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+)
+
+const (
+	leaseIPv4MinPrefix = 24
+	leaseIPv4MaxPrefix = 32
 )
 
 // ErrNftMissing 表示系统未安装 nft 命令。
@@ -66,7 +70,7 @@ func AddLeaseElement(prefix netip.Prefix, timeout string) error {
 	return runNft(rule, "-f", "-")
 }
 
-// AddLeasePrefix 写入带 timeout 的 lease 前缀。IPv4 /24..32 会展开为主机元素。
+// AddLeasePrefix 写入带 timeout 的 lease 前缀。
 func AddLeasePrefix(prefix netip.Prefix, timeout string) error {
 	if !Available() {
 		return ErrNftMissing
@@ -82,10 +86,10 @@ func leaseElementRule(prefix netip.Prefix, timeout string) (string, error) {
 	if prefix.Bits() != prefix.Addr().BitLen() {
 		return "", fmt.Errorf("lease nft set 只支持主机地址，收到: %s", prefix)
 	}
-	setName := "lease6"
 	if prefix.Addr().Is4() {
-		setName = "lease4"
+		return leasePrefixRule(prefix, timeout)
 	}
+	setName := "lease6"
 	return fmt.Sprintf("add element inet %s %s { %s timeout %s }\n", TableName, setName, prefix.Addr().String(), timeout), nil
 }
 
@@ -93,38 +97,20 @@ func leasePrefixRule(prefix netip.Prefix, timeout string) (string, error) {
 	if !prefix.Addr().Is4() {
 		return leaseElementRule(prefix, timeout)
 	}
-	if prefix.Bits() < 24 || prefix.Bits() > 32 {
+	if prefix.Bits() < leaseIPv4MinPrefix || prefix.Bits() > leaseIPv4MaxPrefix {
 		return "", fmt.Errorf("IPv4 lease 前缀只支持 /24-/32，收到: %s", prefix)
 	}
-	addrs := expandIPv4Hosts(prefix)
-	if len(addrs) == 0 {
-		return "", fmt.Errorf("IPv4 lease 前缀为空: %s", prefix)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "add element inet %s lease4 { ", TableName)
-	for i, addr := range addrs {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(&b, "%s timeout %s", addr.String(), timeout)
-	}
-	b.WriteString(" }\n")
-	return b.String(), nil
+	prefix = prefix.Masked()
+	return fmt.Sprintf("add element inet %s %s { %s timeout %s }\n", TableName, leaseIPv4SetName(prefix.Bits()), prefix.Addr().String(), timeout), nil
 }
 
-func expandIPv4Hosts(prefix netip.Prefix) []netip.Addr {
-	prefix = prefix.Masked()
-	start := prefix.Addr()
-	count := 1 << (32 - prefix.Bits())
-	out := make([]netip.Addr, 0, count)
-	addr := start
-	for i := 0; i < count; i++ {
-		out = append(out, addr)
-		if i+1 < count {
-			addr = addr.Next()
-		}
-	}
-	return out
+func leaseIPv4SetName(bits int) string {
+	return fmt.Sprintf("lease4_%d", bits)
+}
+
+func leaseIPv4Mask(bits int) string {
+	mask := uint32(0xffffffff) << (32 - bits)
+	return fmt.Sprintf("%d.%d.%d.%d", byte(mask>>24), byte(mask>>16), byte(mask>>8), byte(mask))
 }
 
 // Snapshot 导出当前 nwall 表为可重放的规则文本；表不存在返回删除指令。

@@ -10,7 +10,7 @@ func TestLeaseElementValueUsesHostAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leaseElementRule: %v", err)
 	}
-	want := "add element inet nwall lease4 { 127.0.0.1 timeout 10m }\n"
+	want := "add element inet nwall lease4_32 { 127.0.0.1 timeout 10m }\n"
 	if got != want {
 		t.Fatalf("rule mismatch\nwant: %q\n got: %q", want, got)
 	}
@@ -22,12 +22,23 @@ func TestLeaseElementRejectsNetworkPrefix(t *testing.T) {
 	}
 }
 
-func TestLeasePrefixRuleExpandsIPv4Prefix(t *testing.T) {
-	got, err := leasePrefixRule(netip.MustParsePrefix("203.0.113.8/30"), "10m")
+func TestLeasePrefixRuleStoresIPv4NetworkKey(t *testing.T) {
+	got, err := leasePrefixRule(netip.MustParsePrefix("203.0.113.9/24"), "10m")
 	if err != nil {
 		t.Fatalf("leasePrefixRule: %v", err)
 	}
-	want := "add element inet nwall lease4 { 203.0.113.8 timeout 10m, 203.0.113.9 timeout 10m, 203.0.113.10 timeout 10m, 203.0.113.11 timeout 10m }\n"
+	want := "add element inet nwall lease4_24 { 203.0.113.0 timeout 10m }\n"
+	if got != want {
+		t.Fatalf("rule mismatch\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestLeasePrefixRuleStoresIPv4HostIn32Set(t *testing.T) {
+	got, err := leasePrefixRule(netip.MustParsePrefix("203.0.113.9/32"), "10m")
+	if err != nil {
+		t.Fatalf("leasePrefixRule: %v", err)
+	}
+	want := "add element inet nwall lease4_32 { 203.0.113.9 timeout 10m }\n"
 	if got != want {
 		t.Fatalf("rule mismatch\nwant: %q\n got: %q", want, got)
 	}

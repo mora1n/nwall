@@ -202,7 +202,7 @@ func TestRenderIngressPriorityOrder(t *testing.T) {
 	assertBefore(t, ingress, "tcp dport @open_ports accept", "ct state new jump ingress_guarded")
 
 	guarded := between(t, out, "\tchain ingress_guarded {\n", "\t}\n")
-	assertBefore(t, guarded, "ip saddr @lease4 update @lease4", "tcp dport vmap @port_policy")
+	assertBefore(t, guarded, "ip saddr & 255.255.255.0 == @lease4_24 update @lease4_24", "tcp dport vmap @port_policy")
 	assertBefore(t, guarded, "tcp dport vmap @port_policy", "jump wl_check")
 }
 
@@ -221,7 +221,7 @@ func TestRenderForwardPriorityOrder(t *testing.T) {
 	assertBefore(t, forward, "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept", "ct status dnat ct state new jump forward_guarded")
 
 	guarded := between(t, out, "\tchain forward_guarded {\n", "\t}\n")
-	assertBefore(t, guarded, "ip saddr @lease4 update @lease4", "meta l4proto tcp ct original proto-dst vmap @forward_port_policy")
+	assertBefore(t, guarded, "ip saddr & 255.255.255.0 == @lease4_24 update @lease4_24", "meta l4proto tcp ct original proto-dst vmap @forward_port_policy")
 	assertBefore(t, guarded, "meta l4proto tcp ct original proto-dst vmap @forward_port_policy", "jump forward_wl_check")
 }
 
@@ -252,11 +252,17 @@ func TestRenderEgressAndDPI(t *testing.T) {
 		"ct mark set 0x6e776470",
 		"queue num 100",
 		"timeout 10m",
-		"set lease4 { type ipv4_addr; flags dynamic,timeout; }",
+		"set lease4_24 { type ipv4_addr; flags dynamic,timeout; }",
+		"set lease4_32 { type ipv4_addr; flags dynamic,timeout; }",
+		"ip saddr & 255.255.255.0 == @lease4_24 update @lease4_24 { ip saddr & 255.255.255.0 timeout 10m }",
+		"ip saddr @lease4_32 update @lease4_32 { ip saddr timeout 10m }",
 	} {
 		if !strings.Contains(out, must) {
 			t.Errorf("渲染缺少 %q\n%s", must, out)
 		}
+	}
+	if strings.Contains(out, "set lease4 {") {
+		t.Errorf("IPv4 lease 不应使用旧 host-only lease4 set\n%s", out)
 	}
 	if strings.Contains(out, "flags interval,dynamic,timeout") {
 		t.Errorf("nftables 不支持 interval,dynamic,timeout 组合\n%s", out)

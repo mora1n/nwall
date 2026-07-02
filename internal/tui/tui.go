@@ -454,16 +454,18 @@ func (m model) updateInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input = inputState{}
 	case "enter":
 		submit := m.input.submit
-		previous := m.input.previous
+		current := m.input
+		previous := current.previous
 		raw := strings.TrimSpace(m.input.value)
+		m.mode = previous
+		m.input = inputState{}
 		if submit != nil {
 			if err := submit(&m, raw); err != nil {
+				m.mode = viewInput
+				m.input = current
 				m.setError(err)
 				return m, nil
 			}
-		}
-		if m.mode == viewInput {
-			m.mode = previous
 		}
 	case "backspace", "ctrl+h":
 		m.input.value = trimLastRune(m.input.value)

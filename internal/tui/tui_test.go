@@ -603,11 +603,11 @@ func TestEgressCustomCIDRListAddsAndClears(t *testing.T) {
 
 func TestLeaseTrustedRelayListAddsEditsAndBatchDeletes(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
-	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 4}
-	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 2}
+	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.mode != viewLeaseTrustedRelays {
-		t.Fatalf("trusted relay should enter list, mode=%v", got.mode)
+		t.Fatalf("allowed lease sender should enter list, mode=%v", got.mode)
 	}
 
 	next, _ = got.updateLeaseTrustedRelays(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -645,7 +645,7 @@ func TestLeaseTrustedRelayListAddsEditsAndBatchDeletes(t *testing.T) {
 
 func TestLeaseTrustedProxyListAddsAndBatchDeletes(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
-	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 1}
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 3}
 	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.mode != viewLeaseTrustedProxies {
@@ -672,6 +672,90 @@ func TestLeaseTrustedProxyListAddsAndBatchDeletes(t *testing.T) {
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	if len(store.cfg.LeaseTrigger.TrustedProxyCIDRs) != 0 {
 		t.Fatalf("trusted proxy batch delete mismatch: %v", store.cfg.LeaseTrigger.TrustedProxyCIDRs)
+	}
+}
+
+func TestLeaseKeyPromptKeepsExistingValue(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Lease.LeaseKey = "secret"
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 1}
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.input.value != "secret" {
+		t.Fatalf("lease key prompt should keep current value, got %q", got.input.value)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if store.cfg.Lease.LeaseKey != "secret" {
+		t.Fatalf("lease key should not be cleared, got %q", store.cfg.Lease.LeaseKey)
+	}
+}
+
+func TestDownmaskKeyPromptKeepsExistingValue(t *testing.T) {
+	store := &fakeStore{
+		cfg:   conf.Default(),
+		dmCfg: store.DownmaskConfig{Token: "mask-secret"},
+		ab:    store.DownmaskABPullConfig{Token: "default-mask-secret"},
+	}
+	m := model{db: store, cfg: store.cfg, downmaskConfig: store.dmCfg, mode: viewDownmaskServer, cursor: 2}
+	next, _ := m.updateDownmaskServer(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.input.value != "mask-secret" {
+		t.Fatalf("downmask key prompt should keep current value, got %q", got.input.value)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if store.dmCfg.Token != "mask-secret" {
+		t.Fatalf("downmask key should not be cleared, got %q", store.dmCfg.Token)
+	}
+
+	got.mode = viewDownmaskClient
+	got.cursor = 11
+	got.downmaskAB = store.ab
+	next, _ = got.updateDownmaskClient(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.input.value != "default-mask-secret" {
+		t.Fatalf("downmask default key prompt should keep current value, got %q", got.input.value)
+	}
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if store.ab.Token != "default-mask-secret" {
+		t.Fatalf("downmask default key should not be cleared, got %q", store.ab.Token)
+	}
+}
+
+func TestLeaseRouteWizardAddsRoute(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseRoutes}
+	next, _ := m.updateLeaseRoutes(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	for _, value := range []string{"default", "3d", "24", "128", "203.0.113.0/24"} {
+		got.input.value = value
+		next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+		got = next.(model)
+	}
+	if len(store.cfg.Lease.Routes) != 1 {
+		t.Fatalf("route not saved: %+v", store.cfg.Lease.Routes)
+	}
+	route := store.cfg.Lease.Routes[0]
+	if route.Label != "default" || route.IdleTTL != "3d" || route.IPv4PrefixLen != 24 || route.IPv6PrefixLen != 128 || !reflect.DeepEqual(route.IPAllowCIDRs, []string{"203.0.113.0/24"}) {
+		t.Fatalf("route mismatch: %+v", route)
+	}
+}
+
+func TestTriggerRouteWizardAddsRoute(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseTriggerRoutes}
+	next, _ := m.updateLeaseTriggerRoutes(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	for _, value := range []string{"tok", "default", "127.0.0.1:19082", "3d", "24", "128"} {
+		got.input.value = value
+		next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+		got = next.(model)
+	}
+	if len(store.cfg.LeaseTrigger.Routes) != 1 {
+		t.Fatalf("trigger route not saved: %+v", store.cfg.LeaseTrigger.Routes)
+	}
+	route := store.cfg.LeaseTrigger.Routes[0]
+	if route.Token != "tok" || route.Label != "default" || route.Target != "127.0.0.1:19082" || route.IdleTTL != "3d" || route.IPv4PrefixLen != 24 || route.IPv6PrefixLen != 128 {
+		t.Fatalf("trigger route mismatch: %+v", route)
 	}
 }
 

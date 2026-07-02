@@ -99,7 +99,7 @@ func (m model) updateDownmaskServer(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskConfig("已更新 UDP 监听")
 		}), nil
 	case 2:
-		return m.prompt("下行伪装共享 key", "", "输入新 key；留空回车自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
+		return m.prompt("下行伪装共享 key", m.downmaskConfig.Token, "输入新 key；清空后回车会自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
 			if strings.TrimSpace(raw) == "" {
 				key, err := generateDownmaskKey()
 				if err != nil {
@@ -268,7 +268,7 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskAB("已更新默认本地源 IP")
 		}), nil
 	case 11:
-		return m.prompt("默认下行伪装 key", "", "输入新 key；留空回车自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
+		return m.prompt("默认下行伪装 key", m.downmaskAB.Token, "输入新 key；清空后回车会自动生成；也可用 openssl rand -hex 16", func(m *model, raw string) error {
 			if strings.TrimSpace(raw) == "" {
 				key, err := generateDownmaskKey()
 				if err != nil {

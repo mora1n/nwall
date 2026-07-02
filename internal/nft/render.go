@@ -73,9 +73,11 @@ func renderSets(b *strings.Builder, in Input) {
 	fmt.Fprintf(b, "\tset egress6 { type ipv6_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.EgressV6)))
 	fmt.Fprintf(b, "\tset lease_relay4 { type ipv4_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.LeaseRelayV4)))
 	fmt.Fprintf(b, "\tset lease_relay6 { type ipv6_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.LeaseRelayV6)))
-	// 租约动态集合（M3 写入，命中刷新 timeout）。nftables 当前不支持
-	// interval+dynamic+timeout 组合，IPv4 前缀租约由服务端展开为主机元素。
-	b.WriteString("\tset lease4 { type ipv4_addr; flags dynamic,timeout; }\n")
+	// 租约动态集合：IPv4 按 prefix length 拆 set，元素保存网络地址 key。
+	// 规则用 ip saddr & mask 命中并刷新 timeout，避免把 /24 展开为 host 元素。
+	for bits := leaseIPv4MinPrefix; bits <= leaseIPv4MaxPrefix; bits++ {
+		fmt.Fprintf(b, "\tset %s { type ipv4_addr; flags dynamic,timeout; }\n", leaseIPv4SetName(bits))
+	}
 	b.WriteString("\tset lease6 { type ipv6_addr; flags dynamic,timeout; }\n")
 }
 
@@ -113,8 +115,7 @@ func renderIngress(b *strings.Builder, in Input) {
 	if leaseTimeout == "" {
 		leaseTimeout = "3d"
 	}
-	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } jump ingress_allowed\n", leaseTimeout)
-	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } jump ingress_allowed\n", leaseTimeout)
+	renderLeaseRules(b, "ingress_allowed", leaseTimeout)
 	if len(in.PortPolicies) > 0 {
 		b.WriteString("\t\ttcp dport vmap @port_policy\n")
 		b.WriteString("\t\tudp dport vmap @port_policy\n")
@@ -184,8 +185,7 @@ func renderForward(b *strings.Builder, in Input) {
 		leaseTimeout = "3d"
 	}
 	b.WriteString("\tchain forward_guarded {\n")
-	fmt.Fprintf(b, "\t\tip saddr @lease4 update @lease4 { ip saddr timeout %s } jump forward_allowed\n", leaseTimeout)
-	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s } jump forward_allowed\n", leaseTimeout)
+	renderLeaseRules(b, "forward_allowed", leaseTimeout)
 	if len(in.PortPolicies) > 0 {
 		b.WriteString("\t\tmeta l4proto tcp ct original proto-dst vmap @forward_port_policy\n")
 		b.WriteString("\t\tmeta l4proto udp ct original proto-dst vmap @forward_port_policy\n")
@@ -212,6 +212,29 @@ func renderForward(b *strings.Builder, in Input) {
 	b.WriteString("\t}\n")
 
 	renderAllowedChain(b, "forward_allowed", "\t\tmeta l4proto tcp ct original proto-dst @skip_ports accept\n\t\tmeta l4proto udp ct original proto-dst @skip_ports accept\n", in)
+}
+
+func renderLeaseRules(b *strings.Builder, target, timeout string) {
+	for bits := leaseIPv4MinPrefix; bits <= leaseIPv4MaxPrefix; bits++ {
+		setName := leaseIPv4SetName(bits)
+		if bits == leaseIPv4MaxPrefix {
+			fmt.Fprintf(b, "\t\tip saddr @%s update @%s { ip saddr timeout %s }\n", setName, setName, timeout)
+			continue
+		}
+		mask := leaseIPv4Mask(bits)
+		fmt.Fprintf(b, "\t\tip saddr & %s == @%s update @%s { ip saddr & %s timeout %s }\n", mask, setName, setName, mask, timeout)
+	}
+	fmt.Fprintf(b, "\t\tip6 saddr @lease6 update @lease6 { ip6 saddr timeout %s }\n", timeout)
+	for bits := leaseIPv4MinPrefix; bits <= leaseIPv4MaxPrefix; bits++ {
+		setName := leaseIPv4SetName(bits)
+		if bits == leaseIPv4MaxPrefix {
+			fmt.Fprintf(b, "\t\tip saddr @%s jump %s\n", setName, target)
+			continue
+		}
+		mask := leaseIPv4Mask(bits)
+		fmt.Fprintf(b, "\t\tip saddr & %s == @%s jump %s\n", mask, setName, target)
+	}
+	fmt.Fprintf(b, "\t\tip6 saddr @lease6 jump %s\n", target)
 }
 
 func renderAllowedChain(b *strings.Builder, name, skipRules string, in Input) {
