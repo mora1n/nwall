@@ -129,7 +129,9 @@ nwall reload
 
 ## TCP 租约
 
-TCP 租约用于把来源 IP 临时写入 nftables 动态集合，适合临时放行入站或 DNAT/forward 入口。每条“临时放行路由”定义默认租约时长、IPv4/IPv6 前缀长度，以及可选的来源过滤。
+TCP 租约用于把来源 IP 临时写入 nftables 动态集合，适合临时放行入站或 DNAT/forward 入口。IPv4 默认放行来源 `/24`，访问触发器时可用 `?mask=32` 只放行单 IP。TUI 交互部署见 [TCP 租约 TUI 部署指南](docs/tcp-lease-tui.md)。
+
+### CLI 等价配置
 
 生成共享 key 和 URL token：
 
@@ -138,9 +140,9 @@ LEASE_KEY="$(nwall lease keygen)"
 TOKEN="$(openssl rand -hex 16)"
 ```
 
-### 无中转机：直接发送租约
+无中转机直接发送租约：
 
-安装机直接暴露 TCP 租约服务端，只允许指定发送端连接：
+安装机：
 
 ```bash
 nwall lease server set --lease-key "$LEASE_KEY" --listen 0.0.0.0:19082 --trusted-relay 203.0.113.9
@@ -149,18 +151,14 @@ nwall protect apply --confirm
 nwall reload
 ```
 
-发送端直接请求安装机：
+发送端：
 
 ```bash
 nwall lease send --target 192.0.2.10:19082 --route default --source-ip 203.0.113.9 --mask 24 --lease-key "$LEASE_KEY"
 nwall lease send --target 192.0.2.10:19082 --route default --source-ip 203.0.113.9 --mask 32 --lease-key "$LEASE_KEY"
 ```
 
-`--mask 24` 临时放行来源 C 段，`--mask 32` 只放行单 IP。IPv6 只支持 `/128`。
-
-### 无中转机：安装机提供 token 触发器
-
-安装机同时运行 TCP 租约服务端和公网 token 触发器，外层 nginx/Caddy 只需要反代到本机 trigger：
+无中转机提供 token 触发器：
 
 ```bash
 nwall lease server set --lease-key "$LEASE_KEY" --listen 127.0.0.1:19082
@@ -171,36 +169,23 @@ nwall protect apply --confirm
 nwall reload
 ```
 
-访问：
-
-```text
-https://example.com/$TOKEN
-https://example.com/$TOKEN?mask=32
-```
-
-`trusted-proxy` 只信任这些反代来源提供的 `X-Real-IP` / `X-Forwarded-For`。如果 trigger 直接暴露给公网，不要把公网客户端网段填进 `trusted-proxy`，否则客户端可以伪造来源 IP。
-
-### 有中转机：中转机提供 token 触发器
-
-安装机只运行 TCP 租约服务端，允许中转机连接：
+有中转机提供 token 触发器：
 
 ```bash
+# 安装机
 nwall lease server set --lease-key "$LEASE_KEY" --listen 0.0.0.0:19082 --trusted-relay 198.51.100.20
 nwall lease route add default --idle-ttl 3d
 nwall protect apply --confirm
 nwall reload
-```
 
-中转机运行公网 token 触发器，把 token 请求转成到安装机的 TCP 租约：
-
-```bash
+# 中转机
 nwall lease server set --lease-key "$LEASE_KEY"
 nwall lease trigger set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1 --trusted-proxy ::1
 nwall lease trigger-route add "$TOKEN" --label default --target 192.0.2.10:19082 --idle-ttl 3d --ipv4-prefix-len 24
 nwall reload
 ```
 
-`TOKEN` 是 URL 路径令牌，不要使用可猜测字符串。修改 daemon 组件配置后执行 `nwall reload`；修改防护规则、公开端口、可信 relay 或首次启用防护后执行 `nwall protect apply --confirm`。
+`trusted-proxy` 只信任这些反代来源提供的 `X-Real-IP` / `X-Forwarded-For`。如果 trigger 直接暴露给公网，不要把公网客户端网段填进 `trusted-proxy`，否则客户端可以伪造来源 IP。修改 daemon 组件配置后执行 `nwall reload`；修改防护规则、公开端口、可信 relay 或首次启用防护后执行 `nwall protect apply --confirm`。
 
 ## 下行伪装
 
