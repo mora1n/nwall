@@ -94,11 +94,11 @@ func renderIngress(b *strings.Builder, in Input) {
 	} else {
 		b.WriteString("\t\tct state established,related accept\n")
 	}
-	b.WriteString("\t\tct state invalid drop\n")
 	renderLeaseRelayAccepts(b, cfg.Lease.ListenPort, in)
-	// ① 公开端口（破窗保险，SSH 通常在此）。
+	// 公开端口是破窗保险，必须先于 invalid drop，避免 NAT/conntrack 抖动锁死 SSH。
 	b.WriteString("\t\ttcp dport @open_ports accept\n")
 	b.WriteString("\t\tudp dport @open_ports accept\n")
+	b.WriteString("\t\tct state invalid drop\n")
 	// ② 受白名单保护：guard_all=true 时所有新入站；否则仅 guarded_ports。
 	if cfg.Protect.GuardAll {
 		b.WriteString("\t\tct state new jump ingress_guarded\n")
@@ -168,9 +168,9 @@ func renderForward(b *strings.Builder, in Input) {
 	} else {
 		b.WriteString("\t\tct status dnat ct state established,related accept\n")
 	}
-	b.WriteString("\t\tct status dnat ct state invalid drop\n")
 	b.WriteString("\t\tct status dnat meta l4proto tcp ct original proto-dst @open_ports accept\n")
 	b.WriteString("\t\tct status dnat meta l4proto udp ct original proto-dst @open_ports accept\n")
+	b.WriteString("\t\tct status dnat ct state invalid drop\n")
 	if cfg.Protect.GuardAll {
 		b.WriteString("\t\tct status dnat ct state new jump forward_guarded\n")
 	} else {
@@ -261,9 +261,13 @@ func renderEgress(b *strings.Builder, in Input) {
 	b.WriteString("\t\ttype filter hook output priority -200; policy drop;\n")
 	b.WriteString("\t\toif \"lo\" accept\n")
 	b.WriteString("\t\tct state established,related accept\n")
-	b.WriteString("\t\tct state invalid drop\n")
+	b.WriteString("\t\ttcp sport @open_ports accept\n")
+	b.WriteString("\t\tudp sport @open_ports accept\n")
+	b.WriteString("\t\ttcp sport @guarded_ports accept\n")
+	b.WriteString("\t\tudp sport @guarded_ports accept\n")
 	b.WriteString("\t\tip daddr @egress4 accept\n")
 	b.WriteString("\t\tip6 daddr @egress6 accept\n")
+	b.WriteString("\t\tct state invalid drop\n")
 	b.WriteString("\t}\n")
 }
 

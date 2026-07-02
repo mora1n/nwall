@@ -197,9 +197,9 @@ func TestRenderIngressPriorityOrder(t *testing.T) {
 		}},
 	})
 	ingress := between(t, out, "\tchain ingress {\n", "\t}\n")
-	assertBefore(t, ingress, "ct state invalid drop", "ip saddr @lease_relay4 tcp dport 41888 accept")
 	assertBefore(t, ingress, "ip saddr @lease_relay4 tcp dport 41888 accept", "tcp dport @open_ports accept")
-	assertBefore(t, ingress, "tcp dport @open_ports accept", "ct state new jump ingress_guarded")
+	assertBefore(t, ingress, "tcp dport @open_ports accept", "ct state invalid drop")
+	assertBefore(t, ingress, "ct state invalid drop", "ct state new jump ingress_guarded")
 
 	guarded := between(t, out, "\tchain ingress_guarded {\n", "\t}\n")
 	assertBefore(t, guarded, "ip saddr & 255.255.255.0 == @lease4_24 update @lease4_24", "tcp dport vmap @port_policy")
@@ -217,8 +217,8 @@ func TestRenderForwardPriorityOrder(t *testing.T) {
 		}},
 	})
 	forward := between(t, out, "\tchain forward {\n", "\t}\n")
-	assertBefore(t, forward, "ct status dnat ct state invalid drop", "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept")
-	assertBefore(t, forward, "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept", "ct status dnat ct state new jump forward_guarded")
+	assertBefore(t, forward, "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept", "ct status dnat ct state invalid drop")
+	assertBefore(t, forward, "ct status dnat ct state invalid drop", "ct status dnat ct state new jump forward_guarded")
 
 	guarded := between(t, out, "\tchain forward_guarded {\n", "\t}\n")
 	assertBefore(t, guarded, "ip saddr & 255.255.255.0 == @lease4_24 update @lease4_24", "meta l4proto tcp ct original proto-dst vmap @forward_port_policy")
@@ -245,6 +245,10 @@ func TestRenderEgressAndDPI(t *testing.T) {
 		"198.51.100.0/24",
 		"chain egress",
 		"type filter hook output priority -200; policy drop;",
+		"tcp sport @open_ports accept",
+		"udp sport @open_ports accept",
+		"tcp sport @guarded_ports accept",
+		"udp sport @guarded_ports accept",
 		"ip daddr @egress4 accept",
 		"ct mark 0x6e77616c accept",
 		"ct mark 0x6e776470 jump ingress_guarded",
@@ -278,6 +282,12 @@ func TestRenderEgressAndDPI(t *testing.T) {
 	if !strings.Contains(wlCheck, "\t\tdrop\n") {
 		t.Errorf("白名单未命中应直接 drop\n%s", out)
 	}
+	egress := between(t, out, "\tchain egress {\n", "\t}\n")
+	assertBefore(t, egress, "ct state established,related accept", "tcp sport @open_ports accept")
+	assertBefore(t, egress, "udp sport @guarded_ports accept", "ip daddr @egress4 accept")
+	assertBefore(t, egress, "udp sport @guarded_ports accept", "ip6 daddr @egress6 accept")
+	assertBefore(t, egress, "ip daddr @egress4 accept", "ct state invalid drop")
+	assertBefore(t, egress, "ip6 daddr @egress6 accept", "ct state invalid drop")
 }
 
 func TestRenderDPIWorksWhenIngressWhitelistDisabled(t *testing.T) {
