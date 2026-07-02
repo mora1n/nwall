@@ -56,12 +56,12 @@ func (m model) updateHome(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) viewHome() string {
 	rows := []row{
-		{text: "状态 / 应用", hint: "查看 daemon 状态，应用规则或重载组件", detail: "Enter 进入；用于应用/确认/停用规则和查看 daemon 状态。"},
+		{text: "状态 / 应用", hint: "查看 daemon 状态，应用或停用规则", detail: "Enter 进入；应用并确认当前设置会同时让 daemon 重读 DB。"},
 		{text: "防护", hint: "总开关、公开端口、受保护端口、回滚时间", detail: "Enter 进入；修改配置后仍需在 状态 / 应用 中应用规则。"},
 		{text: "入站", hint: "入站白名单、省/市、自定义 CIDR、端口覆盖", detail: "Enter 进入；省市和端口覆盖只写入 DB，应用后才影响规则。"},
 		{text: "出站", hint: "出站白名单、省份、自定义 CIDR", detail: "Enter 进入；配置出站允许范围。"},
 		{text: "协议封锁", hint: "HTTP/TLS/SOCKS 和跳过端口", detail: "Enter 进入；配置协议封锁开关和跳过端口。"},
-		{text: "TCP 租约", hint: "租约服务端、路由、token 触发器", detail: "Enter 进入；配置 TCP 租约服务、路由和公网 token 触发器。"},
+		{text: "TCP 租约", hint: "服务端、临时放行路由、token 触发器", detail: "Enter 进入；配置 TCP 租约服务、临时放行路由和公网 token 触发器。"},
 		{text: "下行伪装", hint: "服务端、自动拉取、目标和状态", detail: "Enter 进入；配置服务端、自动拉取策略和目标。"},
 	}
 	return m.renderRows("nwall 配置", rows, "↑/↓/k/j 选择 • Enter/l 进入 • 输入序号后 Enter • q 退出")
@@ -74,14 +74,14 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.backKey(key) {
 		return m.goHome(), nil
 	}
-	if moved, cmd, ok := m.moveCursor(key, 5); ok {
+	if moved, cmd, ok := m.moveCursor(key, 4); ok {
 		return moved, cmd
 	}
 	if !m.isEnterOrNumber(key) && !m.enterKey(key) {
 		return m, nil
 	}
 	var idx int
-	m, idx, ok := m.handleChoice(key, 5)
+	m, idx, ok := m.handleChoice(key, 4)
 	if !ok {
 		return m, nil
 	}
@@ -113,6 +113,14 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 			return m, nil
 		}
+		if err := m.actions.Reload(); err != nil {
+			m.setError(err)
+			return m, nil
+		}
+		if err := m.refreshStatus(); err != nil {
+			m.setError(err)
+			return m, nil
+		}
 		m.status = "已应用并确认当前设置"
 		m.err = ""
 	case 2:
@@ -126,13 +134,6 @@ func (m model) updateStatus(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case 3:
-		if err := m.actions.Reload(); err != nil {
-			m.setError(err)
-			return m, nil
-		}
-		m.status = "daemon 已重载"
-		m.err = ""
-	case 4:
 		if err := m.refreshStatus(); err != nil {
 			m.setError(err)
 			return m, nil
@@ -156,9 +157,8 @@ func (m *model) refreshStatus() error {
 func (m model) viewStatus() string {
 	rows := []row{
 		{text: "应用当前设置", hint: "开启防护并启动回滚", detail: "Enter 后进入确认；写入当前 DB 配置并启动回滚倒计时，超时未确认会回滚。"},
-		{text: "应用并确认当前设置", hint: "跳过回滚倒计时", detail: "Enter 直接执行 apply --confirm；用于确认当前设置已经可用。"},
+		{text: "应用并确认当前设置", hint: "应用规则、确认并重启组件", detail: "Enter 直接执行 apply --confirm，然后让 daemon 重读 DB 并重启长期组件。"},
 		{text: "停用防护规则", hint: "删除规则并关闭 protect.enabled", detail: "Enter 直接删除已应用规则，并把 protect.enabled=false 写入 DB。"},
-		{text: "重载 daemon", hint: "重启长期组件", detail: "Enter 让 daemon 重读 DB 并重启 DPI、租约、token 触发器和下行伪装；不是应用规则的替代。"},
 		{text: "刷新状态", hint: "读取 daemon 状态", detail: "Enter 刷新 daemon 和下行伪装状态快照。"},
 	}
 	var b strings.Builder

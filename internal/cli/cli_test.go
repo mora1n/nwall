@@ -71,13 +71,13 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err := Run([]string{"ingress", "custom", "add", "203.0.113.9", "2001:db8::1"}); err != nil {
 		t.Fatalf("ingress custom add: %v", err)
 	}
-	if err := Run([]string{"lease", "server", "set", "--lease-key", "secret", "--listen", "127.0.0.1:18090", "--trusted-relay", "198.51.100.0/24"}); err != nil {
+	if err := Run([]string{"lease", "server", "set", "--lease-key", "secret", "--listen", "127.0.0.1:18090", "--trusted-relay", "198.51.100.7", "--trusted-relay", "198.51.100.7/32"}); err != nil {
 		t.Fatalf("lease server set: %v", err)
 	}
-	if err := Run([]string{"lease", "route", "add", "office", "--idle-ttl", "5m", "--allow", "203.0.113.0/24"}); err != nil {
+	if err := Run([]string{"lease", "route", "add", "office", "--idle-ttl", "5m", "--allow", "203.0.113.9"}); err != nil {
 		t.Fatalf("lease route add: %v", err)
 	}
-	if err := Run([]string{"lease", "trigger", "set", "--listen", "127.0.0.1:19081", "--trusted-proxy", "127.0.0.1/32", "--trusted-proxy", "::1/128"}); err != nil {
+	if err := Run([]string{"lease", "trigger", "set", "--listen", "127.0.0.1:19081", "--trusted-proxy", "127.0.0.1", "--trusted-proxy", "::1"}); err != nil {
 		t.Fatalf("lease trigger set: %v", err)
 	}
 	if err := Run([]string{"lease", "trigger-route", "add", "test-token", "--label", "office", "--target", "198.51.100.7:19082", "--idle-ttl", "3d"}); err != nil {
@@ -110,11 +110,20 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if got.Lease.LeaseKey != "secret" || got.Lease.ListenPort != 18090 || len(got.Lease.TrustedRelayCIDRs) != 1 {
 		t.Fatalf("lease config 未写入: %+v", got.Lease)
 	}
+	if got.Lease.TrustedRelayCIDRs[0] != "198.51.100.7/32" {
+		t.Fatalf("trusted relay 应规范化裸 IP: %+v", got.Lease.TrustedRelayCIDRs)
+	}
 	if len(got.Lease.Routes) != 1 || got.Lease.Routes[0].Label != "office" {
 		t.Fatalf("lease route 未写入: %+v", got.Lease.Routes)
 	}
+	if !reflect.DeepEqual(got.Lease.Routes[0].IPAllowCIDRs, []string{"203.0.113.9/32"}) {
+		t.Fatalf("lease route allow 应规范化裸 IP: %+v", got.Lease.Routes[0].IPAllowCIDRs)
+	}
 	if got.LeaseTrigger.ListenPort != 19081 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 2 {
 		t.Fatalf("lease trigger config 未写入: %+v", got.LeaseTrigger)
+	}
+	if !reflect.DeepEqual(got.LeaseTrigger.TrustedProxyCIDRs, []string{"127.0.0.1/32", "::1/128"}) {
+		t.Fatalf("trusted proxy 应规范化裸 IP: %+v", got.LeaseTrigger.TrustedProxyCIDRs)
 	}
 	if len(got.LeaseTrigger.Routes) != 1 || got.LeaseTrigger.Routes[0].Token != "test-token" || got.LeaseTrigger.Routes[0].Target != "198.51.100.7:19082" {
 		t.Fatalf("lease trigger route 未写入: %+v", got.LeaseTrigger.Routes)
@@ -131,6 +140,19 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	}
 	if maskCfg.TCPAddr != "127.0.0.1:15301" || maskCfg.Token != "mask-token" || maskCfg.MaxRate != 1024 {
 		t.Fatalf("downmask config 未写入: %+v", maskCfg)
+	}
+}
+
+func TestLeaseCIDRFlagsRejectInvalidIP(t *testing.T) {
+	setupTestDB(t)
+	if err := Run([]string{"lease", "server", "set", "--trusted-relay", "not-an-ip"}); err == nil {
+		t.Fatal("invalid trusted relay should fail")
+	}
+	if err := Run([]string{"lease", "trigger", "set", "--trusted-proxy", "not-an-ip"}); err == nil {
+		t.Fatal("invalid trusted proxy should fail")
+	}
+	if err := Run([]string{"lease", "route", "add", "office", "--allow", "not-an-ip"}); err == nil {
+		t.Fatal("invalid route allow should fail")
 	}
 }
 
@@ -216,6 +238,7 @@ func TestHelpIncludesCommonExamples(t *testing.T) {
 		"nwall protect config set --clear-open-ports --open-port 2222 --open-port 19082",
 		"440100 440300 510100",
 		"--allow 203.0.113.0/24",
+		"添加临时放行路由",
 		"--mask 24",
 		"nwall lease trigger-route add <token>",
 		"公网 token 触发器",

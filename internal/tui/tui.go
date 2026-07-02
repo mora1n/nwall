@@ -56,8 +56,10 @@ const (
 	viewDPI
 	viewDPISkipPorts
 	viewLease
+	viewLeaseTrustedRelays
 	viewLeaseRoutes
 	viewLeaseTrigger
+	viewLeaseTrustedProxies
 	viewLeaseTriggerRoutes
 	viewDownmask
 	viewDownmaskServer
@@ -205,10 +207,14 @@ func (m model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateDPISkipPorts(key)
 	case viewLease:
 		return m.updateLease(key)
+	case viewLeaseTrustedRelays:
+		return m.updateLeaseTrustedRelays(key)
 	case viewLeaseRoutes:
 		return m.updateLeaseRoutes(key)
 	case viewLeaseTrigger:
 		return m.updateLeaseTrigger(key)
+	case viewLeaseTrustedProxies:
+		return m.updateLeaseTrustedProxies(key)
 	case viewLeaseTriggerRoutes:
 		return m.updateLeaseTriggerRoutes(key)
 	case viewDownmask:
@@ -268,10 +274,14 @@ func (m model) View() string {
 		return frame(m.viewDPISkipPorts())
 	case viewLease:
 		return frame(m.viewLease())
+	case viewLeaseTrustedRelays:
+		return frame(m.viewLeaseTrustedRelays())
 	case viewLeaseRoutes:
 		return frame(m.viewLeaseRoutes())
 	case viewLeaseTrigger:
 		return frame(m.viewLeaseTrigger())
+	case viewLeaseTrustedProxies:
+		return frame(m.viewLeaseTrustedProxies())
 	case viewLeaseTriggerRoutes:
 		return frame(m.viewLeaseTriggerRoutes())
 	case viewDownmask:

@@ -215,11 +215,23 @@ func TestApplyAndReloadActionsSurfaceState(t *testing.T) {
 	if actions.applyCalls != 1 || actions.applyConfirm || actions.applyTimeout != 0 || got.err != "" || !strings.Contains(got.status, "已应用当前设置") {
 		t.Fatalf("apply state mismatch calls=%d status=%q err=%q", actions.applyCalls, got.status, got.err)
 	}
-	got.cursor = 3
+	if actions.reloadCalls != 0 {
+		t.Fatalf("应用当前设置不应重载 daemon，reload calls=%d", actions.reloadCalls)
+	}
+	got.cursor = 1
 	next, _ = got.updateStatus(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
-	if actions.reloadCalls != 1 || got.err != "" || !strings.Contains(got.status, "daemon 已重载") {
-		t.Fatalf("reload state mismatch calls=%d status=%q err=%q", actions.reloadCalls, got.status, got.err)
+	if actions.applyCalls != 2 || !actions.applyConfirm || actions.reloadCalls != 1 || got.err != "" || !strings.Contains(got.status, "已应用并确认当前设置") {
+		t.Fatalf("apply+reload state mismatch applyCalls=%d confirm=%v reloadCalls=%d status=%q err=%q", actions.applyCalls, actions.applyConfirm, actions.reloadCalls, got.status, got.err)
+	}
+}
+
+func TestStatusViewNoStandaloneReload(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewStatus}
+	got := m.viewStatus()
+	if strings.Contains(got, "4. 重载 daemon") {
+		t.Fatalf("status view should merge daemon reload into apply confirm:\n%s", got)
 	}
 }
 
@@ -390,6 +402,9 @@ func TestOpenPortListAddsAndDeletesRanges(t *testing.T) {
 	m := model{db: store, cfg: store.cfg, mode: viewOpenPorts}
 	next, _ := m.updateOpenPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	got := next.(model)
+	if got.input.value != "" {
+		t.Fatalf("open port add prompt should not prefill default port, got %q", got.input.value)
+	}
 	got.input.value = "40000-42000,50000"
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
@@ -492,6 +507,9 @@ func assertPortListFlow(t *testing.T, m model, update func(model, tea.KeyMsg) (t
 	t.Helper()
 	next, _ := update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	got := next.(model)
+	if got.input.value != "" {
+		t.Fatalf("port add prompt should not prefill default port, got %q", got.input.value)
+	}
 	got.input.value = "8443,40000-40002,8443"
 	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
@@ -580,6 +598,94 @@ func TestEgressCustomCIDRListAddsAndClears(t *testing.T) {
 	next, _ = got.updateEgressCustomCIDRs(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if len(store.cfg.Egress.CustomCIDRs) != 0 {
 		t.Fatalf("egress cidr clear mismatch: %v", store.cfg.Egress.CustomCIDRs)
+	}
+}
+
+func TestLeaseTrustedRelayListAddsEditsAndBatchDeletes(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 4}
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewLeaseTrustedRelays {
+		t.Fatalf("trusted relay should enter list, mode=%v", got.mode)
+	}
+
+	next, _ = got.updateLeaseTrustedRelays(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got = next.(model)
+	got.input.value = "198.176.52.125,2001:db8::1"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want := []string{"198.176.52.125/32", "2001:db8::1/128"}
+	if !reflect.DeepEqual(store.cfg.Lease.TrustedRelayCIDRs, want) {
+		t.Fatalf("trusted relay add mismatch got=%v want=%v", store.cfg.Lease.TrustedRelayCIDRs, want)
+	}
+
+	got.cursor = 0
+	next, _ = got.updateLeaseTrustedRelays(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	got = next.(model)
+	got.input.value = "198.51.100.0/24"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want = []string{"198.51.100.0/24", "2001:db8::1/128"}
+	if !reflect.DeepEqual(store.cfg.Lease.TrustedRelayCIDRs, want) {
+		t.Fatalf("trusted relay edit mismatch got=%v want=%v", store.cfg.Lease.TrustedRelayCIDRs, want)
+	}
+
+	next, _ = got.updateLeaseTrustedRelays(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	if got.input.value != "1" {
+		t.Fatalf("trusted relay delete should default to current index, got %q", got.input.value)
+	}
+	got.input.value = "1-2"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(store.cfg.Lease.TrustedRelayCIDRs) != 0 {
+		t.Fatalf("trusted relay batch delete mismatch: %v", store.cfg.Lease.TrustedRelayCIDRs)
+	}
+}
+
+func TestLeaseTrustedProxyListAddsAndBatchDeletes(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 1}
+	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.mode != viewLeaseTrustedProxies {
+		t.Fatalf("trusted proxy should enter list, mode=%v", got.mode)
+	}
+
+	next, _ = got.updateLeaseTrustedProxies(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got = next.(model)
+	got.input.value = "127.0.0.1,::1"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	want := []string{"127.0.0.1/32", "::1/128"}
+	if !reflect.DeepEqual(store.cfg.LeaseTrigger.TrustedProxyCIDRs, want) {
+		t.Fatalf("trusted proxy add mismatch got=%v want=%v", store.cfg.LeaseTrigger.TrustedProxyCIDRs, want)
+	}
+
+	got.cursor = 1
+	next, _ = got.updateLeaseTrustedProxies(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = next.(model)
+	if got.input.value != "2" {
+		t.Fatalf("trusted proxy delete should default to current index, got %q", got.input.value)
+	}
+	got.input.value = "1,2"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(store.cfg.LeaseTrigger.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("trusted proxy batch delete mismatch: %v", store.cfg.LeaseTrigger.TrustedProxyCIDRs)
+	}
+}
+
+func TestLeaseRouteWordingExplainsTemporaryAllow(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Lease.Routes = []conf.Route{{Label: "office", IdleTTL: "3d", IPv4PrefixLen: 24, IPv6PrefixLen: 128}}
+	m := model{db: store, cfg: store.cfg}
+	for name, view := range map[string]string{
+		"lease":       m.viewLease(),
+		"leaseRoutes": m.viewLeaseRoutes(),
+	} {
+		if !strings.Contains(view, "临时放行") {
+			t.Fatalf("%s should explain temporary allow routes:\n%s", name, view)
+		}
 	}
 }
 

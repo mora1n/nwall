@@ -75,14 +75,8 @@ func (m model) updateLease(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新签名时间窗")
 		}), nil
 	case 4:
-		return m.prompt("可信 TCP relay CIDR", strings.Join(m.cfg.Lease.TrustedRelayCIDRs, ","), "逗号分隔 CIDR；留空清空", func(m *model, raw string) error {
-			cidrs, err := parsePrefixList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.Lease.TrustedRelayCIDRs = cidrs
-			return m.saveConfig("已更新可信 relay")
-		}), nil
+		m.mode = viewLeaseTrustedRelays
+		m.cursor = 0
 	case 5:
 		m.mode = viewLeaseRoutes
 		m.cursor = 0
@@ -99,11 +93,35 @@ func (m model) viewLease() string {
 		{text: "共享 key: " + valueOrDash(m.cfg.Lease.LeaseKey), hint: "客户端签名用；留空自动生成新 key"},
 		{text: "默认租约时长: " + m.cfg.Lease.IdleTTL, hint: "未在路由中指定 ttl 时使用"},
 		{text: fmt.Sprintf("签名时间窗: %d 秒", m.cfg.Lease.TSWindowSec), hint: "允许的请求时间偏差，防重放"},
-		{text: "可信 relay: " + countSummary(len(m.cfg.Lease.TrustedRelayCIDRs)), hint: "允许这些 relay 透传真实来源 IP"},
-		{text: "租约路由: " + countSummary(len(m.cfg.Lease.Routes)), hint: "配置 label 到租约放行策略"},
+		{text: "可信 relay: " + countSummary(len(m.cfg.Lease.TrustedRelayCIDRs)), hint: "允许这些 relay 连接 TCP 租约服务端"},
+		{text: "临时放行路由: " + countSummary(len(m.cfg.Lease.Routes)), hint: "配置收到租约后临时放行的来源范围"},
 		{text: "token 触发器", hint: fmt.Sprintf("%s routes=%d", formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), len(m.cfg.LeaseTrigger.Routes)), detail: "公网 HTTP token 请求会转成安装机 TCP 租约。"},
 	}
 	return m.renderRows("TCP 租约", rows, "Enter/e 编辑或进入 • 0/Esc 返回 • q 退出")
+}
+
+func (m model) updateLeaseTrustedRelays(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.updateCIDRList(key, cidrListOptions{
+		values:      m.cfg.Lease.TrustedRelayCIDRs,
+		parent:      viewLease,
+		parentRow:   4,
+		addTitle:    "新增可信 relay",
+		editTitle:   "修改可信 relay",
+		delTitle:    "删除可信 relay",
+		addStatus:   "已新增可信 relay",
+		editStatus:  "已修改可信 relay",
+		delStatus:   "已删除可信 relay",
+		clearStatus: "已清空可信 relay",
+		hint:        "允许连接租约服务端",
+		detail:      "只有这些来源可以连接 TCP 租约服务端；签名仍会继续校验。",
+		assign: func(m *model, values []string) {
+			m.cfg.Lease.TrustedRelayCIDRs = values
+		},
+	})
+}
+
+func (m model) viewLeaseTrustedRelays() string {
+	return m.viewCIDRList("TCP 租约 / 可信 relay", m.cfg.Lease.TrustedRelayCIDRs, "暂无可信 relay", "允许连接租约服务端", "只有这些来源可以连接 TCP 租约服务端；签名仍会继续校验。")
 }
 
 func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -118,13 +136,13 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "a":
-		return m.prompt("新增租约路由", "", "格式: <label> <ttl> <v4:24-32> <v6:128> [allow,allow]；例 office 3d 24 128 203.0.113.0/24", func(m *model, raw string) error {
+		return m.prompt("新增临时放行路由", "", "格式: <label> <ttl> <v4:24-32> <v6:128> [allow,allow]；例 office 3d 24 128 203.0.113.0/24", func(m *model, raw string) error {
 			route, err := parseLeaseRoute(raw)
 			if err != nil {
 				return err
 			}
 			m.cfg.Lease.Routes = upsertRoute(m.cfg.Lease.Routes, route)
-			return m.saveConfig("已更新租约路由")
+			return m.saveConfig("已更新临时放行路由")
 		}), nil
 	case "d":
 		if total == 0 {
@@ -135,7 +153,7 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.cfg.Lease.Routes) && m.cursor > 0 {
 			m.cursor--
 		}
-		if err := m.saveConfig("已删除租约路由: " + label); err != nil {
+		if err := m.saveConfig("已删除临时放行路由: " + label); err != nil {
 			m.setError(err)
 		}
 		return m, nil
@@ -144,14 +162,14 @@ func (m model) updateLeaseRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		route := m.cfg.Lease.Routes[m.cursor]
-		return m.prompt("编辑租约路由", formatLeaseRoute(route), "label 供发送端/token 路由引用；allow 是可选来源 IP/CIDR 过滤", func(m *model, raw string) error {
+		return m.prompt("编辑临时放行路由", formatLeaseRoute(route), "label 供发送端/token 路由引用；allow 是可选来源 IP/CIDR 过滤", func(m *model, raw string) error {
 			next, err := parseLeaseRoute(raw)
 			if err != nil {
 				return err
 			}
 			m.cfg.Lease.Routes = removeRoute(m.cfg.Lease.Routes, route.Label)
 			m.cfg.Lease.Routes = upsertRoute(m.cfg.Lease.Routes, next)
-			return m.saveConfig("已更新租约路由")
+			return m.saveConfig("已更新临时放行路由")
 		}), nil
 	default:
 		if moved, cmd, ok := m.moveCursor(key, total); ok {
@@ -167,13 +185,13 @@ func (m model) viewLeaseRoutes() string {
 		rows = append(rows, row{
 			text:   fmt.Sprintf("%s  ttl=%s  v4/%d v6/%d", route.Label, valueOr(route.IdleTTL, m.cfg.Lease.IdleTTL), routeV4Len(route.IPv4PrefixLen), routeV6Len(route.IPv6PrefixLen)),
 			hint:   valueOrDash(strings.Join(route.IPAllowCIDRs, ",")),
-			detail: "label 供 lease send 或 token 路由引用；allow CIDR 留空表示不额外限制来源。",
+			detail: "收到租约后按该路由临时放行来源；IPv4 默认 /24，mask=32 可改为单 IP。",
 		})
 	}
 	if len(rows) == 0 {
-		rows = []row{{text: "暂无租约路由", hint: "按 a 新增"}}
+		rows = []row{{text: "暂无临时放行路由", hint: "按 a 新增"}}
 	}
-	return m.renderRows("TCP 租约 / 路由", rows, "a 新增 • e/Enter 编辑 • d 删除 • 0/Esc 返回")
+	return m.renderRows("TCP 租约 / 临时放行路由", rows, "a 新增 • e/Enter 编辑 • d 删除 • 0/Esc 返回")
 }
 
 func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -213,19 +231,37 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveConfig("已更新 token 触发器监听")
 		}), nil
 	case 1:
-		return m.prompt("可信反代 CIDR", strings.Join(m.cfg.LeaseTrigger.TrustedProxyCIDRs, ","), "逗号分隔 CIDR；留空清空", func(m *model, raw string) error {
-			cidrs, err := parsePrefixList(raw)
-			if err != nil {
-				return err
-			}
-			m.cfg.LeaseTrigger.TrustedProxyCIDRs = cidrs
-			return m.saveConfig("已更新可信反代")
-		}), nil
+		m.mode = viewLeaseTrustedProxies
+		m.cursor = 0
 	case 2:
 		m.mode = viewLeaseTriggerRoutes
 		m.cursor = 0
 	}
 	return m, nil
+}
+
+func (m model) updateLeaseTrustedProxies(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.updateCIDRList(key, cidrListOptions{
+		values:      m.cfg.LeaseTrigger.TrustedProxyCIDRs,
+		parent:      viewLeaseTrigger,
+		parentRow:   1,
+		addTitle:    "新增可信反代",
+		editTitle:   "修改可信反代",
+		delTitle:    "删除可信反代",
+		addStatus:   "已新增可信反代",
+		editStatus:  "已修改可信反代",
+		delStatus:   "已删除可信反代",
+		clearStatus: "已清空可信反代",
+		hint:        "允许提供真实客户端 IP",
+		detail:      "只有这些反代来源的 X-Real-IP / X-Forwarded-For 会被信任。",
+		assign: func(m *model, values []string) {
+			m.cfg.LeaseTrigger.TrustedProxyCIDRs = values
+		},
+	})
+}
+
+func (m model) viewLeaseTrustedProxies() string {
+	return m.viewCIDRList("TCP 租约 / token 触发器 / 可信反代", m.cfg.LeaseTrigger.TrustedProxyCIDRs, "暂无可信反代", "允许提供真实客户端 IP", "只有这些反代来源的 X-Real-IP / X-Forwarded-For 会被信任。")
 }
 
 func (m model) viewLeaseTrigger() string {
@@ -275,7 +311,7 @@ func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		route := m.cfg.LeaseTrigger.Routes[m.cursor]
-		return m.prompt("编辑 token 路由", formatTriggerRoute(route), "token 是 URL 路径；label 对应租约路由；target 是安装机 TCP 租约服务端", func(m *model, raw string) error {
+		return m.prompt("编辑 token 路由", formatTriggerRoute(route), "token 是 URL 路径；label 对应临时放行路由；target 是安装机 TCP 租约服务端", func(m *model, raw string) error {
 			next, err := parseTriggerRoute(raw)
 			if err != nil {
 				return err

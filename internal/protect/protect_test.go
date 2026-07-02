@@ -53,6 +53,22 @@ func TestConfirmCreatesSentinel(t *testing.T) {
 	}
 }
 
+func TestConfirmAtWritesSelectedDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "selected.db")
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := confirmAt(path); err != nil {
+		t.Fatalf("confirmAt: %v", err)
+	}
+	if _, err := db.RuntimeValue(runtimeConfirmKey); err != nil {
+		t.Fatalf("confirmAt should write sentinel to selected DB: %v", err)
+	}
+}
+
 func setupTestDB(t *testing.T) *store.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "nwall.db")

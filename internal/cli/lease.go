@@ -70,7 +70,7 @@ func leaseConfig(args []string) error {
 	idleTTL := fs.String("idle-ttl", "", "默认租约时长，如 3d")
 	tsWindow := fs.Int("ts-window-sec", 0, "签名时间窗秒数")
 	var trustedRelay multiFlag
-	fs.Var(&trustedRelay, "trusted-relay", "可信 TCP relay CIDR，可重复")
+	fs.Var(&trustedRelay, "trusted-relay", "可信 TCP relay IP/CIDR，可重复")
 	clearTrustedRelay := fs.Bool("clear-trusted-relay", false, "清空可信 TCP relay CIDR")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -95,14 +95,20 @@ func leaseConfig(args []string) error {
 	if *clearTrustedRelay {
 		cfg.Lease.TrustedRelayCIDRs = nil
 	}
-	cfg.Lease.TrustedRelayCIDRs = append(cfg.Lease.TrustedRelayCIDRs, []string(trustedRelay)...)
+	if len(trustedRelay) > 0 {
+		cidrs, err := canonicalCIDRArgs([]string(trustedRelay)...)
+		if err != nil {
+			return err
+		}
+		cfg.Lease.TrustedRelayCIDRs = appendUnique(cfg.Lease.TrustedRelayCIDRs, cidrs...)
+	}
 	return saveConfig(cfg, "已更新 lease 配置")
 }
 
 func leaseSend(args []string) error {
 	fs := flag.NewFlagSet("lease send", flag.ContinueOnError)
 	target := fs.String("target", "", "目标 TCP agent，格式 HOST:PORT")
-	label := fs.String("route", "", "租约 route label")
+	label := fs.String("route", "", "临时放行路由 label")
 	sourceIP := fs.String("source-ip", "", "要放行的来源 IP")
 	mask := fs.String("mask", "", "租约掩码，IPv4 24-32；32 表示单 IP")
 	idleTTL := fs.String("idle-ttl", "", "本次租约时长，如 3d/10m；为空使用 route 默认值")
@@ -159,7 +165,7 @@ func leaseTriggerConfig(args []string) error {
 	fs := flag.NewFlagSet("lease trigger set", flag.ContinueOnError)
 	listen := fs.String("listen", "", "监听地址 HOST:PORT")
 	var trustedProxy multiFlag
-	fs.Var(&trustedProxy, "trusted-proxy", "可信反代 CIDR，可重复")
+	fs.Var(&trustedProxy, "trusted-proxy", "可信反代 IP/CIDR，可重复")
 	clearTrustedProxy := fs.Bool("clear-trusted-proxy", false, "清空可信反代 CIDR")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -175,7 +181,13 @@ func leaseTriggerConfig(args []string) error {
 	if *clearTrustedProxy {
 		cfg.LeaseTrigger.TrustedProxyCIDRs = nil
 	}
-	cfg.LeaseTrigger.TrustedProxyCIDRs = append(cfg.LeaseTrigger.TrustedProxyCIDRs, []string(trustedProxy)...)
+	if len(trustedProxy) > 0 {
+		cidrs, err := canonicalCIDRArgs([]string(trustedProxy)...)
+		if err != nil {
+			return err
+		}
+		cfg.LeaseTrigger.TrustedProxyCIDRs = appendUnique(cfg.LeaseTrigger.TrustedProxyCIDRs, cidrs...)
+	}
 	return saveConfig(cfg, "已更新 lease trigger 配置")
 }
 
@@ -207,10 +219,10 @@ func leaseTriggerRoute(args []string) error {
 			next = append(next, r)
 		}
 		if !found {
-			return fmt.Errorf("未找到 trigger route: %s", args[1])
+			return fmt.Errorf("未找到 token 路由: %s", args[1])
 		}
 		cfg.LeaseTrigger.Routes = next
-		return saveConfig(cfg, "已删除 lease trigger route: "+args[1])
+		return saveConfig(cfg, "已删除 token 路由: "+args[1])
 	case "add":
 		return leaseTriggerRouteAdd(cfg, args[1:])
 	default:
@@ -224,7 +236,7 @@ func leaseTriggerRouteAdd(cfg conf.Config, args []string) error {
 	}
 	token := args[0]
 	fs := flag.NewFlagSet("lease trigger-route add", flag.ContinueOnError)
-	label := fs.String("label", "", "TCP agent route label")
+	label := fs.String("label", "", "安装机临时放行路由 label")
 	target := fs.String("target", "", "目标 TCP agent，格式 HOST:PORT")
 	idleTTL := fs.String("idle-ttl", cfg.Lease.IdleTTL, "idle ttl")
 	v4 := fs.Int("ipv4-prefix-len", 24, "IPv4 lease prefix length, 24-32")
@@ -240,7 +252,7 @@ func leaseTriggerRouteAdd(cfg conf.Config, args []string) error {
 		IPv4PrefixLen: *v4,
 		IPv6PrefixLen: *v6,
 	})
-	return saveConfig(cfg, "已写入 lease trigger route: "+token)
+	return saveConfig(cfg, "已写入 token 路由: "+token)
 }
 
 func leaseRoute(args []string) error {
@@ -274,7 +286,7 @@ func leaseRoute(args []string) error {
 			return fmt.Errorf("未找到 route: %s", args[1])
 		}
 		cfg.Lease.Routes = next
-		return saveConfig(cfg, "已删除 lease route: "+args[1])
+		return saveConfig(cfg, "已删除临时放行路由: "+args[1])
 	case "add":
 		return leaseRouteAdd(cfg, args[1:])
 	default:
@@ -284,7 +296,7 @@ func leaseRoute(args []string) error {
 
 func leaseRouteAdd(cfg conf.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall lease route add <label> [--idle-ttl 3d] [--ipv4-prefix-len 24] [--ipv6-prefix-len 128] [--allow CIDR]")
+		return fmt.Errorf("用法: nwall lease route add <label> [--idle-ttl 3d] [--ipv4-prefix-len 24] [--ipv6-prefix-len 128] [--allow IP/CIDR]")
 	}
 	label := args[0]
 	fs := flag.NewFlagSet("lease route add", flag.ContinueOnError)
@@ -292,8 +304,12 @@ func leaseRouteAdd(cfg conf.Config, args []string) error {
 	v4 := fs.Int("ipv4-prefix-len", 24, "IPv4 lease prefix length, 24-32")
 	v6 := fs.Int("ipv6-prefix-len", 128, "IPv6 lease prefix length, only 128")
 	var allows multiFlag
-	fs.Var(&allows, "allow", "允许来源 CIDR，可重复")
+	fs.Var(&allows, "allow", "允许来源 IP/CIDR，可重复")
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	allowCIDRs, err := canonicalCIDRArgs([]string(allows)...)
+	if err != nil {
 		return err
 	}
 	cfg.Lease.Routes = upsertRoute(cfg.Lease.Routes, conf.Route{
@@ -301,9 +317,9 @@ func leaseRouteAdd(cfg conf.Config, args []string) error {
 		IdleTTL:       *idleTTL,
 		IPv4PrefixLen: *v4,
 		IPv6PrefixLen: *v6,
-		IPAllowCIDRs:  []string(allows),
+		IPAllowCIDRs:  allowCIDRs,
 	})
-	return saveConfig(cfg, "已写入 lease route: "+label)
+	return saveConfig(cfg, "已写入临时放行路由: "+label)
 }
 
 func upsertRoute(routes []conf.Route, route conf.Route) []conf.Route {

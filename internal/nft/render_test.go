@@ -89,6 +89,31 @@ func TestRenderOpenPort40422IsAccepted(t *testing.T) {
 	}
 }
 
+func TestRenderLeaseRelayCanReachAgentPort(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Protect.GuardAll = true
+	cfg.Ingress.Enabled = true
+	cfg.Lease.ListenPort = 41888
+	out := Render(Input{
+		Cfg:          cfg,
+		LeaseRelayV4: []netip.Prefix{netip.MustParsePrefix("198.176.52.125/32")},
+		LeaseRelayV6: []netip.Prefix{netip.MustParsePrefix("2001:db8::1/128")},
+	})
+	for _, must := range []string{
+		"set lease_relay4 { type ipv4_addr; flags interval; auto-merge; elements = { 198.176.52.125/32 } }",
+		"set lease_relay6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::1/128 } }",
+		"ip saddr @lease_relay4 tcp dport 41888 accept",
+		"ip6 saddr @lease_relay6 tcp dport 41888 accept",
+	} {
+		if !strings.Contains(out, must) {
+			t.Fatalf("lease relay 应能访问 TCP 租约 agent，缺少 %q\n%s", must, out)
+		}
+	}
+	if strings.Contains(out, "udp dport 41888") {
+		t.Fatalf("TCP 租约 agent 不应放行 UDP\n%s", out)
+	}
+}
+
 func TestRenderForwardUsesOriginalPublicPort(t *testing.T) {
 	cfg := conf.Default()
 	cfg.Protect.OpenPorts = []int{40422}
@@ -157,6 +182,47 @@ func TestRenderPortPolicyOverride(t *testing.T) {
 			t.Errorf("端口覆盖渲染缺少 %q\n%s", must, out)
 		}
 	}
+}
+
+func TestRenderIngressPriorityOrder(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Ingress.Enabled = true
+	cfg.Lease.ListenPort = 41888
+	out := Render(Input{
+		Cfg:          cfg,
+		LeaseRelayV4: []netip.Prefix{netip.MustParsePrefix("198.176.52.125/32")},
+		PortPolicies: []PortPolicyInput{{
+			ListenPort: 8443,
+			WLSrcV4:    []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		}},
+	})
+	ingress := between(t, out, "\tchain ingress {\n", "\t}\n")
+	assertBefore(t, ingress, "ct state invalid drop", "ip saddr @lease_relay4 tcp dport 41888 accept")
+	assertBefore(t, ingress, "ip saddr @lease_relay4 tcp dport 41888 accept", "tcp dport @open_ports accept")
+	assertBefore(t, ingress, "tcp dport @open_ports accept", "ct state new jump ingress_guarded")
+
+	guarded := between(t, out, "\tchain ingress_guarded {\n", "\t}\n")
+	assertBefore(t, guarded, "ip saddr @lease4 update @lease4", "tcp dport vmap @port_policy")
+	assertBefore(t, guarded, "tcp dport vmap @port_policy", "jump wl_check")
+}
+
+func TestRenderForwardPriorityOrder(t *testing.T) {
+	cfg := conf.Default()
+	cfg.Ingress.Enabled = true
+	out := Render(Input{
+		Cfg: cfg,
+		PortPolicies: []PortPolicyInput{{
+			ListenPort: 41423,
+			WLSrcV4:    []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		}},
+	})
+	forward := between(t, out, "\tchain forward {\n", "\t}\n")
+	assertBefore(t, forward, "ct status dnat ct state invalid drop", "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept")
+	assertBefore(t, forward, "ct status dnat meta l4proto tcp ct original proto-dst @open_ports accept", "ct status dnat ct state new jump forward_guarded")
+
+	guarded := between(t, out, "\tchain forward_guarded {\n", "\t}\n")
+	assertBefore(t, guarded, "ip saddr @lease4 update @lease4", "meta l4proto tcp ct original proto-dst vmap @forward_port_policy")
+	assertBefore(t, guarded, "meta l4proto tcp ct original proto-dst vmap @forward_port_policy", "jump forward_wl_check")
 }
 
 func TestRenderEgressAndDPI(t *testing.T) {
@@ -265,4 +331,16 @@ func between(t *testing.T, text, start, end string) string {
 		t.Fatalf("missing end %q in\n%s", end, rest)
 	}
 	return rest[:j]
+}
+
+func assertBefore(t *testing.T, text, first, second string) {
+	t.Helper()
+	i := strings.Index(text, first)
+	j := strings.Index(text, second)
+	if i < 0 || j < 0 {
+		t.Fatalf("missing priority fragments %q or %q in\n%s", first, second, text)
+	}
+	if i >= j {
+		t.Fatalf("expected %q before %q in\n%s", first, second, text)
+	}
 }

@@ -188,16 +188,7 @@ func parseSingleCIDR(raw string) (string, error) {
 }
 
 func parsePrefixList(raw string) ([]string, error) {
-	values := splitCSV(raw)
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		prefix, err := netip.ParsePrefix(value)
-		if err != nil {
-			return nil, fmt.Errorf("无效 CIDR: %s", value)
-		}
-		out = append(out, prefix.Masked().String())
-	}
-	return uniqueSorted(out), nil
+	return parseCIDRList(raw)
 }
 
 func parseCIDRLike(raw string) (string, error) {

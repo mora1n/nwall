@@ -3,6 +3,7 @@ package protect
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -68,6 +69,17 @@ func BuildInput(cfg conf.Config) (nft.Input, error) {
 		in.EgressV4 = src.V4
 		in.EgressV6 = src.V6
 	}
+	for _, raw := range cfg.Lease.TrustedRelayCIDRs {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return nft.Input{}, fmt.Errorf("lease.trusted_relay_cidrs 无效: %s", raw)
+		}
+		if prefix.Addr().Is4() {
+			in.LeaseRelayV4 = append(in.LeaseRelayV4, prefix.Masked())
+		} else {
+			in.LeaseRelayV6 = append(in.LeaseRelayV6, prefix.Masked())
+		}
+	}
 	return in, nil
 }
 
@@ -126,8 +138,7 @@ func applyWithStorePath(cfg conf.Config, confirm bool, timeoutSec int, dbPath st
 		return fmt.Errorf("应用规则失败: %w", err)
 	}
 	if confirm {
-		clearConfirmSentinelAt(dbPath)
-		return nil
+		return confirmAt(dbPath)
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = cfg.Protect.RollbackTimeoutSec
@@ -137,7 +148,11 @@ func applyWithStorePath(cfg conf.Config, confirm bool, timeoutSec int, dbPath st
 
 // Confirm 写入确认哨兵，取消待定的回滚倒计时。
 func Confirm() error {
-	db, err := store.Open(storePath())
+	return confirmAt(storePath())
+}
+
+func confirmAt(dbPath string) error {
+	db, err := store.Open(dbPath)
 	if err != nil {
 		return err
 	}

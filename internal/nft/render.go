@@ -26,6 +26,8 @@ type Input struct {
 	PortPolicies []PortPolicyInput
 	EgressV4     []netip.Prefix
 	EgressV6     []netip.Prefix
+	LeaseRelayV4 []netip.Prefix
+	LeaseRelayV6 []netip.Prefix
 	LeaseTimeout string
 	EnableDPI    bool
 	NFQueueNum   int
@@ -69,6 +71,8 @@ func renderSets(b *strings.Builder, in Input) {
 	fmt.Fprintf(b, "\tset skip_ports { type inet_service; flags interval;%s }\n", elemsInline(portsToStrings(cfg.Protect.ProtocolSkipPorts)))
 	fmt.Fprintf(b, "\tset egress4 { type ipv4_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.EgressV4)))
 	fmt.Fprintf(b, "\tset egress6 { type ipv6_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.EgressV6)))
+	fmt.Fprintf(b, "\tset lease_relay4 { type ipv4_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.LeaseRelayV4)))
+	fmt.Fprintf(b, "\tset lease_relay6 { type ipv6_addr; flags interval; auto-merge;%s }\n", elemsInline(prefixesToStrings(in.LeaseRelayV6)))
 	// 租约动态集合（M3 写入，命中刷新 timeout）。nftables 当前不支持
 	// interval+dynamic+timeout 组合，IPv4 前缀租约由服务端展开为主机元素。
 	b.WriteString("\tset lease4 { type ipv4_addr; flags dynamic,timeout; }\n")
@@ -89,6 +93,7 @@ func renderIngress(b *strings.Builder, in Input) {
 		b.WriteString("\t\tct state established,related accept\n")
 	}
 	b.WriteString("\t\tct state invalid drop\n")
+	renderLeaseRelayAccepts(b, cfg.Lease.ListenPort, in)
 	// ① 公开端口（破窗保险，SSH 通常在此）。
 	b.WriteString("\t\ttcp dport @open_ports accept\n")
 	b.WriteString("\t\tudp dport @open_ports accept\n")
@@ -137,6 +142,18 @@ func renderIngress(b *strings.Builder, in Input) {
 	b.WriteString("\t}\n")
 
 	renderAllowedChain(b, "ingress_allowed", "\t\ttcp dport @skip_ports accept\n\t\tudp dport @skip_ports accept\n", in)
+}
+
+func renderLeaseRelayAccepts(b *strings.Builder, port int, in Input) {
+	if port <= 0 || port > 65535 {
+		return
+	}
+	if len(in.LeaseRelayV4) > 0 {
+		fmt.Fprintf(b, "\t\tip saddr @lease_relay4 tcp dport %d accept\n", port)
+	}
+	if len(in.LeaseRelayV6) > 0 {
+		fmt.Fprintf(b, "\t\tip6 saddr @lease_relay6 tcp dport %d accept\n", port)
+	}
 }
 
 func renderForward(b *strings.Builder, in Input) {
