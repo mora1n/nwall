@@ -11,6 +11,14 @@ func TestApplyFallbacks(t *testing.T) {
 	if cfg.Lease.ListenPort != 18080 || cfg.Lease.IdleTTL != "3d" || cfg.Lease.TSWindowSec != 60 {
 		t.Errorf("lease 默认值回落失败: %+v", cfg.Lease)
 	}
+	cfg = Default()
+	cfg.LeaseTrigger.Enabled = false
+	cfg.LeaseTrigger.ListenHost = ""
+	cfg.LeaseTrigger.ListenPort = 0
+	ApplyFallbacks(&cfg)
+	if cfg.LeaseTrigger.ListenHost != "" || cfg.LeaseTrigger.ListenPort != 0 {
+		t.Errorf("停用 token trigger 时不应回填监听: %+v", cfg.LeaseTrigger)
+	}
 }
 
 func TestValidateRejectsBadCNMode(t *testing.T) {
@@ -84,5 +92,19 @@ func TestValidateLeasePrefixLimits(t *testing.T) {
 	cfg.Lease.Routes[0].IPv6PrefixLen = 64
 	if err := Validate(cfg); err == nil {
 		t.Fatal("IPv6 /64 应拒绝")
+	}
+}
+
+func TestValidateDisabledLeaseTriggerAllowsEmptyListen(t *testing.T) {
+	cfg := Default()
+	cfg.LeaseTrigger.Enabled = false
+	cfg.LeaseTrigger.ListenHost = ""
+	cfg.LeaseTrigger.ListenPort = 0
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("停用 token trigger 应允许空监听: %v", err)
+	}
+	cfg.LeaseTrigger.Enabled = true
+	if err := Validate(cfg); err == nil {
+		t.Fatal("启用 token trigger 应拒绝空监听")
 	}
 }

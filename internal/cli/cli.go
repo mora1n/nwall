@@ -334,7 +334,7 @@ func printUsage(w *os.File) {
   nwall lease route add <label> --idle-ttl 3d --allow 203.0.113.0/24 # 添加临时放行路由，IPv4 默认放行来源 /24
   nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 24 # 手动发送 /24 租约
   nwall lease send --target 192.0.2.10:19082 --route <label> --source-ip 203.0.113.9 --mask 32 # 手动发送单 IP 租约
-  nwall lease trigger set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32 # 配置公网 token 触发器
+  nwall lease trigger set --listen 127.0.0.1:19081 --trusted-proxy 127.0.0.1/32 # 配置公网 token 触发器；--disable 停用
   nwall lease trigger-route add <token> --label <label> --target 192.0.2.10:19082 --idle-ttl 3d # 添加 token 到临时放行路由
   nwall downmask server set --tcp 0.0.0.0:15301 --udp 0.0.0.0:15301 --token <downmask-key> # 配置下行伪装服务端
   nwall downmask seed --size 268435456                 # 生成外部 seed 文件，DB 只保存路径

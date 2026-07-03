@@ -79,6 +79,7 @@ type Route struct {
 
 // LeaseTrigger 是公网 token 触发器配置；触发器只把 HTTP token 请求转成 TCP 租约消息。
 type LeaseTrigger struct {
+	Enabled           bool
 	ListenHost        string
 	ListenPort        int
 	TrustedProxyCIDRs []string
@@ -116,6 +117,7 @@ func Default() Config {
 			TSWindowSec: 60,
 		},
 		LeaseTrigger: LeaseTrigger{
+			Enabled:    true,
 			ListenHost: "127.0.0.1",
 			ListenPort: 18081,
 		},

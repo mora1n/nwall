@@ -151,7 +151,8 @@ func leaseTriggerConfig(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("listen: %s:%d\n", cfg.LeaseTrigger.ListenHost, cfg.LeaseTrigger.ListenPort)
+		fmt.Printf("enabled: %v\n", cfg.LeaseTrigger.Enabled)
+		fmt.Printf("listen: %s\n", leaseTriggerListenText(cfg.LeaseTrigger))
 		fmt.Printf("trusted_proxy_cidrs: %v\n", cfg.LeaseTrigger.TrustedProxyCIDRs)
 		return nil
 	}
@@ -164,17 +165,39 @@ func leaseTriggerConfig(args []string) error {
 	}
 	fs := flag.NewFlagSet("lease trigger set", flag.ContinueOnError)
 	listen := fs.String("listen", "", "监听地址 HOST:PORT")
+	enable := fs.Bool("enable", false, "启用公网 token 触发器")
+	disable := fs.Bool("disable", false, "停用公网 token 触发器并清空监听")
 	var trustedProxy multiFlag
 	fs.Var(&trustedProxy, "trusted-proxy", "可信反代 IP/CIDR，可重复")
 	clearTrustedProxy := fs.Bool("clear-trusted-proxy", false, "清空可信反代 CIDR")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	if *enable && *disable {
+		return fmt.Errorf("--enable 和 --disable 不能同时使用")
+	}
+	if *disable && *listen != "" {
+		return fmt.Errorf("--disable 和 --listen 不能同时使用")
+	}
+	if *disable {
+		cfg.LeaseTrigger.Enabled = false
+		cfg.LeaseTrigger.ListenHost = ""
+		cfg.LeaseTrigger.ListenPort = 0
+	}
+	if *enable {
+		cfg.LeaseTrigger.Enabled = true
+		if strings.TrimSpace(cfg.LeaseTrigger.ListenHost) == "" || cfg.LeaseTrigger.ListenPort == 0 {
+			defaultTrigger := conf.Default().LeaseTrigger
+			cfg.LeaseTrigger.ListenHost = defaultTrigger.ListenHost
+			cfg.LeaseTrigger.ListenPort = defaultTrigger.ListenPort
+		}
+	}
 	if *listen != "" {
 		host, port, err := splitListen(*listen)
 		if err != nil {
 			return err
 		}
+		cfg.LeaseTrigger.Enabled = true
 		cfg.LeaseTrigger.ListenHost = host
 		cfg.LeaseTrigger.ListenPort = port
 	}
@@ -189,6 +212,13 @@ func leaseTriggerConfig(args []string) error {
 		cfg.LeaseTrigger.TrustedProxyCIDRs = appendUnique(cfg.LeaseTrigger.TrustedProxyCIDRs, cidrs...)
 	}
 	return saveConfig(cfg, "已更新 lease trigger 配置")
+}
+
+func leaseTriggerListenText(cfg conf.LeaseTrigger) string {
+	if !cfg.Enabled || strings.TrimSpace(cfg.ListenHost) == "" || cfg.ListenPort == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.ListenPort)
 }
 
 func leaseTriggerRoute(args []string) error {

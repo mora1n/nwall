@@ -37,11 +37,13 @@ func ApplyFallbacks(cfg *Config) {
 	if cfg.Lease.TSWindowSec <= 0 {
 		cfg.Lease.TSWindowSec = 60
 	}
-	if cfg.LeaseTrigger.ListenHost == "" {
-		cfg.LeaseTrigger.ListenHost = "127.0.0.1"
-	}
-	if cfg.LeaseTrigger.ListenPort == 0 {
-		cfg.LeaseTrigger.ListenPort = 18081
+	if cfg.LeaseTrigger.Enabled {
+		if cfg.LeaseTrigger.ListenHost == "" {
+			cfg.LeaseTrigger.ListenHost = "127.0.0.1"
+		}
+		if cfg.LeaseTrigger.ListenPort == 0 {
+			cfg.LeaseTrigger.ListenPort = 18081
+		}
 	}
 }
 
@@ -134,8 +136,13 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("lease.trusted_relay_cidrs[%d] 无效: %s", i, raw)
 		}
 	}
-	if err := validatePort(cfg.LeaseTrigger.ListenPort); err != nil {
-		return fmt.Errorf("lease_trigger.listen_port: %w", err)
+	if cfg.LeaseTrigger.Enabled {
+		if strings.TrimSpace(cfg.LeaseTrigger.ListenHost) == "" {
+			return fmt.Errorf("lease_trigger.listen_host 不能为空")
+		}
+		if err := validatePort(cfg.LeaseTrigger.ListenPort); err != nil {
+			return fmt.Errorf("lease_trigger.listen_port: %w", err)
+		}
 	}
 	for i, raw := range cfg.LeaseTrigger.TrustedProxyCIDRs {
 		if _, err := netip.ParsePrefix(raw); err != nil {

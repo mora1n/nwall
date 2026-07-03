@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mora1n/nwall/internal/conf"
 	"github.com/mora1n/nwall/internal/store"
 )
 
@@ -98,6 +99,23 @@ func TestSnapshotReconcilesProtectDisabledFromDB(t *testing.T) {
 	}
 	if !status.OK {
 		t.Fatalf("disabled protect should not mark status unhealthy: %+v", status)
+	}
+}
+
+func TestStartLeaseTriggerDisabledByConfig(t *testing.T) {
+	s := &Server{components: map[string]ComponentStatus{}}
+	cfg := conf.Default()
+	cfg.Lease.LeaseKey = "secret"
+	cfg.LeaseTrigger.Enabled = false
+	cfg.LeaseTrigger.ListenHost = ""
+	cfg.LeaseTrigger.ListenPort = 0
+	cfg.LeaseTrigger.Routes = []conf.TriggerRoute{{Token: "tok", Label: "default", Target: "127.0.0.1:19082", IdleTTL: "3d", IPv4PrefixLen: 24, IPv6PrefixLen: 128}}
+
+	s.startLeaseTrigger(context.Background(), cfg)
+
+	status := s.components["lease_trigger"]
+	if status.State != "disabled" || status.Message != "token trigger 已停用" {
+		t.Fatalf("disabled trigger should not start: %+v", status)
 	}
 }
 

@@ -713,6 +713,37 @@ func TestLeaseTrustedProxyListAddsAndBatchDeletes(t *testing.T) {
 	}
 }
 
+func TestLeaseTriggerListenDeleteDisablesAndPreservesConfig(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.LeaseTrigger.TrustedProxyCIDRs = []string{"127.0.0.1/32"}
+	store.cfg.LeaseTrigger.Routes = []conf.TriggerRoute{{Token: "tok", Label: "default", Target: "127.0.0.1:19082", IdleTTL: "3d", IPv4PrefixLen: 24, IPv6PrefixLen: 128}}
+	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 0}
+
+	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got := next.(model)
+	if store.cfg.LeaseTrigger.Enabled || store.cfg.LeaseTrigger.ListenHost != "" || store.cfg.LeaseTrigger.ListenPort != 0 {
+		t.Fatalf("trigger listen delete should disable and clear listen: %+v", store.cfg.LeaseTrigger)
+	}
+	if len(store.cfg.LeaseTrigger.Routes) != 1 || len(store.cfg.LeaseTrigger.TrustedProxyCIDRs) != 1 {
+		t.Fatalf("trigger listen delete should preserve routes and proxies: %+v", store.cfg.LeaseTrigger)
+	}
+	if !strings.Contains(got.viewLeaseTrigger(), "监听: -") {
+		t.Fatalf("disabled trigger listen should render dash:\n%s", got.viewLeaseTrigger())
+	}
+
+	next, _ = got.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.input.value != "" {
+		t.Fatalf("disabled trigger listen prompt should start empty, got %q", got.input.value)
+	}
+	got.input.value = "127.0.0.1:19081"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = next.(model)
+	if !store.cfg.LeaseTrigger.Enabled || store.cfg.LeaseTrigger.ListenHost != "127.0.0.1" || store.cfg.LeaseTrigger.ListenPort != 19081 {
+		t.Fatalf("editing listen should re-enable trigger: %+v", store.cfg.LeaseTrigger)
+	}
+}
+
 func TestLeaseKeyPromptKeepsExistingValue(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	store.cfg.Lease.LeaseKey = "secret"

@@ -210,6 +210,10 @@ func (s *Server) startLeaseAgent(ctx context.Context, cfg conf.Config) {
 }
 
 func (s *Server) startLeaseTrigger(ctx context.Context, cfg conf.Config) {
+	if !cfg.LeaseTrigger.Enabled {
+		s.setComponent("lease_trigger", "disabled", "token trigger 已停用", nil)
+		return
+	}
 	if strings.TrimSpace(cfg.Lease.LeaseKey) == "" || len(cfg.LeaseTrigger.Routes) == 0 {
 		s.setComponent("lease_trigger", "disabled", "未配置 lease key 或 trigger route", nil)
 		return

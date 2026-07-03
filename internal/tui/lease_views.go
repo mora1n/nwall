@@ -91,7 +91,7 @@ func (m model) viewLease() string {
 		{text: "默认租约时长: " + m.cfg.Lease.IdleTTL, hint: "未在路由中指定 ttl 时使用"},
 		{text: fmt.Sprintf("签名时间窗: %d 秒", m.cfg.Lease.TSWindowSec), hint: "允许的请求时间偏差，防重放"},
 		{text: "临时放行路由: " + countSummary(len(m.cfg.Lease.Routes)), hint: "配置收到租约后临时放行的来源范围"},
-		{text: "公网 token 触发器 / 连接来源", hint: fmt.Sprintf("%s routes=%d sources=%d proxies=%d", formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), len(m.cfg.LeaseTrigger.Routes), len(m.cfg.Lease.TrustedRelayCIDRs), len(m.cfg.LeaseTrigger.TrustedProxyCIDRs)), detail: "配置公网 token 入口，以及谁能发送租约、谁能提供真实客户端 IP。"},
+		{text: "公网 token 触发器 / 连接来源", hint: fmt.Sprintf("%s routes=%d sources=%d proxies=%d", leaseTriggerListenText(m.cfg.LeaseTrigger), len(m.cfg.LeaseTrigger.Routes), len(m.cfg.Lease.TrustedRelayCIDRs), len(m.cfg.LeaseTrigger.TrustedProxyCIDRs)), detail: "配置公网 token 入口，以及谁能发送租约、谁能提供真实客户端 IP。"},
 	}
 	return m.renderRows("TCP 租约", rows, "Enter/e 编辑或进入 • 0/Esc 返回 • q 退出")
 }
@@ -255,6 +255,16 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if moved, cmd, ok := m.moveCursor(key, 4); ok {
 		return moved, cmd
 	}
+	if key.String() == "d" && m.cursor == 0 {
+		m = m.resetNumberBuffer()
+		m.cfg.LeaseTrigger.Enabled = false
+		m.cfg.LeaseTrigger.ListenHost = ""
+		m.cfg.LeaseTrigger.ListenPort = 0
+		if err := m.saveConfig("已停用 token 触发器监听"); err != nil {
+			m.setError(err)
+		}
+		return m, nil
+	}
 	if !m.isEnterOrNumber(key) && key.String() != "e" {
 		return m, nil
 	}
@@ -270,11 +280,16 @@ func (m model) updateLeaseTrigger(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch idx {
 	case 0:
-		return m.prompt("公网 token 触发器监听", formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), "格式 HOST:PORT，例如 127.0.0.1:18081", func(m *model, raw string) error {
+		current := ""
+		if m.cfg.LeaseTrigger.Enabled {
+			current = formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort)
+		}
+		return m.prompt("公网 token 触发器监听", current, "格式 HOST:PORT，例如 127.0.0.1:18081", func(m *model, raw string) error {
 			host, port, err := splitHostPort(raw)
 			if err != nil {
 				return err
 			}
+			m.cfg.LeaseTrigger.Enabled = true
 			m.cfg.LeaseTrigger.ListenHost = host
 			m.cfg.LeaseTrigger.ListenPort = port
 			return m.saveConfig("已更新 token 触发器监听")
@@ -318,12 +333,19 @@ func (m model) viewLeaseTrustedProxies() string {
 
 func (m model) viewLeaseTrigger() string {
 	rows := []row{
-		{text: "监听: " + formatListen(m.cfg.LeaseTrigger.ListenHost, m.cfg.LeaseTrigger.ListenPort), hint: "公网 token HTTP 入口监听地址"},
+		{text: "监听: " + leaseTriggerListenText(m.cfg.LeaseTrigger), hint: "公网 token HTTP 入口监听地址；按 d 停用"},
 		{text: "token 路由: " + countSummary(len(m.cfg.LeaseTrigger.Routes)), hint: "公网 token 请求转成 TCP 租约"},
 		{text: "允许发送租约到本机: " + countSummary(len(m.cfg.Lease.TrustedRelayCIDRs)), hint: "直接发送填发送端；中转触发填中转机出口"},
 		{text: "反代真实 IP 来源: " + countSummary(len(m.cfg.LeaseTrigger.TrustedProxyCIDRs)), hint: "允许这些反代提供真实客户端 IP"},
 	}
-	return m.renderRows("TCP 租约 / token 触发器 / 连接来源", rows, "Enter/e 编辑或进入 • 0/Esc 返回 • q 退出")
+	return m.renderRows("TCP 租约 / token 触发器 / 连接来源", rows, "Enter/e 编辑或进入 • d 清空监听 • 0/Esc 返回 • q 退出")
+}
+
+func leaseTriggerListenText(cfg conf.LeaseTrigger) string {
+	if !cfg.Enabled || strings.TrimSpace(cfg.ListenHost) == "" || cfg.ListenPort == 0 {
+		return "-"
+	}
+	return formatListen(cfg.ListenHost, cfg.ListenPort)
 }
 
 func (m model) updateLeaseTriggerRoutes(key tea.KeyMsg) (tea.Model, tea.Cmd) {

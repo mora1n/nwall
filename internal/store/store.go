@@ -143,6 +143,7 @@ func (db *DB) init(ctx context.Context) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS lease_trigger_config(
 			id INTEGER PRIMARY KEY CHECK (id = 1),
+			enabled INTEGER NOT NULL DEFAULT 1,
 			listen_host TEXT NOT NULL,
 			listen_port INTEGER NOT NULL
 		)`,
@@ -267,6 +268,9 @@ func (db *DB) init(ctx context.Context) error {
 	if err := db.migrateLeaseTCPOnly(ctx); err != nil {
 		return err
 	}
+	if err := db.migrateLeaseTriggerEnabled(ctx); err != nil {
+		return err
+	}
 	if err := db.migrateDownmaskExternalSeed(ctx); err != nil {
 		return err
 	}
@@ -278,6 +282,10 @@ func (db *DB) migrateLeaseTCPOnly(ctx context.Context) error {
 		return err
 	}
 	return db.ensureColumn(ctx, "lease_routes", "idle_ttl", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (db *DB) migrateLeaseTriggerEnabled(ctx context.Context) error {
+	return db.ensureColumn(ctx, "lease_trigger_config", "enabled", "INTEGER NOT NULL DEFAULT 1")
 }
 
 func (db *DB) migrateDownmaskExternalSeed(ctx context.Context) error {
@@ -330,8 +338,8 @@ func (db *DB) ensureDefaults(ctx context.Context) error {
 		cfg.Lease.ListenHost, cfg.Lease.ListenPort, cfg.Lease.IdleTTL, cfg.Lease.TSWindowSec); err != nil {
 		return err
 	}
-	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO lease_trigger_config(id, listen_host, listen_port) VALUES(1, ?, ?)`,
-		cfg.LeaseTrigger.ListenHost, cfg.LeaseTrigger.ListenPort); err != nil {
+	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO lease_trigger_config(id, enabled, listen_host, listen_port) VALUES(1, ?, ?, ?)`,
+		boolInt(cfg.LeaseTrigger.Enabled), cfg.LeaseTrigger.ListenHost, cfg.LeaseTrigger.ListenPort); err != nil {
 		return err
 	}
 	if _, err := db.sql.ExecContext(ctx, `INSERT OR IGNORE INTO downmask_config(id, tcp_addr, udp_addr, token, seed_path, max_rate, udp_payload_bytes) VALUES(1, '', '', '', ?, 0, 1200)`, DefaultDownmaskSeedPath); err != nil {
@@ -446,8 +454,8 @@ func (db *DB) LoadConfig() (conf.Config, error) {
 	if cfg.Lease.Routes, err = db.loadLeaseRoutes(); err != nil {
 		return conf.Config{}, err
 	}
-	if err := db.sql.QueryRow(`SELECT listen_host, listen_port FROM lease_trigger_config WHERE id=1`).
-		Scan(&cfg.LeaseTrigger.ListenHost, &cfg.LeaseTrigger.ListenPort); err != nil {
+	if err := db.sql.QueryRow(`SELECT enabled, listen_host, listen_port FROM lease_trigger_config WHERE id=1`).
+		Scan((*boolScan)(&cfg.LeaseTrigger.Enabled), &cfg.LeaseTrigger.ListenHost, &cfg.LeaseTrigger.ListenPort); err != nil {
 		return conf.Config{}, err
 	}
 	if cfg.LeaseTrigger.TrustedProxyCIDRs, err = db.stringList(`SELECT cidr FROM lease_trigger_trusted_proxy_cidrs ORDER BY cidr`); err != nil {
@@ -775,8 +783,8 @@ func saveLeaseTx(tx *sql.Tx, cfg conf.Lease) error {
 }
 
 func saveLeaseTriggerTx(tx *sql.Tx, cfg conf.LeaseTrigger) error {
-	if _, err := tx.Exec(`UPDATE lease_trigger_config SET listen_host=?, listen_port=? WHERE id=1`,
-		cfg.ListenHost, cfg.ListenPort); err != nil {
+	if _, err := tx.Exec(`UPDATE lease_trigger_config SET enabled=?, listen_host=?, listen_port=? WHERE id=1`,
+		boolInt(cfg.Enabled), cfg.ListenHost, cfg.ListenPort); err != nil {
 		return err
 	}
 	if err := replaceStrings(tx, "lease_trigger_trusted_proxy_cidrs", "cidr", cfg.TrustedProxyCIDRs); err != nil {

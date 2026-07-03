@@ -120,7 +120,7 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if !reflect.DeepEqual(got.Lease.Routes[0].IPAllowCIDRs, []string{"203.0.113.9/32"}) {
 		t.Fatalf("lease route allow 应规范化裸 IP: %+v", got.Lease.Routes[0].IPAllowCIDRs)
 	}
-	if got.LeaseTrigger.ListenPort != 19081 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 2 {
+	if !got.LeaseTrigger.Enabled || got.LeaseTrigger.ListenPort != 19081 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 2 {
 		t.Fatalf("lease trigger config 未写入: %+v", got.LeaseTrigger)
 	}
 	if !reflect.DeepEqual(got.LeaseTrigger.TrustedProxyCIDRs, []string{"127.0.0.1/32", "::1/128"}) {
@@ -154,6 +154,45 @@ func TestLeaseCIDRFlagsRejectInvalidIP(t *testing.T) {
 	}
 	if err := Run([]string{"lease", "route", "add", "office", "--allow", "not-an-ip"}); err == nil {
 		t.Fatal("invalid route allow should fail")
+	}
+}
+
+func TestLeaseTriggerEnableDisableCLI(t *testing.T) {
+	db := setupTestDB(t)
+	if err := Run([]string{"lease", "trigger", "set", "--listen", "127.0.0.1:19081", "--trusted-proxy", "127.0.0.1"}); err != nil {
+		t.Fatalf("lease trigger set: %v", err)
+	}
+	if err := Run([]string{"lease", "trigger-route", "add", "tok", "--label", "default", "--target", "127.0.0.1:19082", "--idle-ttl", "3d"}); err != nil {
+		t.Fatalf("lease trigger-route add: %v", err)
+	}
+	if err := Run([]string{"lease", "trigger", "set", "--disable"}); err != nil {
+		t.Fatalf("lease trigger disable: %v", err)
+	}
+	got, err := db.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got.LeaseTrigger.Enabled || got.LeaseTrigger.ListenHost != "" || got.LeaseTrigger.ListenPort != 0 {
+		t.Fatalf("trigger disable mismatch: %+v", got.LeaseTrigger)
+	}
+	if len(got.LeaseTrigger.Routes) != 1 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 1 {
+		t.Fatalf("disable should preserve routes and proxies: %+v", got.LeaseTrigger)
+	}
+	if err := Run([]string{"lease", "trigger", "set", "--enable"}); err != nil {
+		t.Fatalf("lease trigger enable: %v", err)
+	}
+	got, err = db.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !got.LeaseTrigger.Enabled || got.LeaseTrigger.ListenHost != "127.0.0.1" || got.LeaseTrigger.ListenPort != 18081 {
+		t.Fatalf("trigger enable should restore default listen: %+v", got.LeaseTrigger)
+	}
+	if err := Run([]string{"lease", "trigger", "set", "--enable", "--disable"}); err == nil {
+		t.Fatal("enable and disable together should fail")
+	}
+	if err := Run([]string{"lease", "trigger", "set", "--disable", "--listen", "127.0.0.1:19081"}); err == nil {
+		t.Fatal("disable and listen together should fail")
 	}
 }
 

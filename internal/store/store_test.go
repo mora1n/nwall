@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestDefaultDBInitializesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Protect.OpenPorts[0] != 22 || cfg.Lease.ListenPort != 18080 || cfg.LeaseTrigger.ListenPort != 18081 {
+	if cfg.Protect.OpenPorts[0] != 22 || cfg.Lease.ListenPort != 18080 || !cfg.LeaseTrigger.Enabled || cfg.LeaseTrigger.ListenPort != 18081 {
 		t.Fatalf("默认配置不符: %+v", cfg)
 	}
 }
@@ -45,11 +46,37 @@ func TestSaveConfigRoundTripModuleTables(t *testing.T) {
 	if len(got.Lease.Routes) != 1 || got.Lease.Routes[0].Label != "office" {
 		t.Fatalf("lease routes round-trip 不符: %+v", got.Lease.Routes)
 	}
-	if got.LeaseTrigger.ListenPort != 19081 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 2 {
+	if !got.LeaseTrigger.Enabled || got.LeaseTrigger.ListenPort != 19081 || len(got.LeaseTrigger.TrustedProxyCIDRs) != 2 {
 		t.Fatalf("lease trigger config round-trip 不符: %+v", got.LeaseTrigger)
 	}
 	if len(got.LeaseTrigger.Routes) != 1 || got.LeaseTrigger.Routes[0].Token != "test-token" || got.LeaseTrigger.Routes[0].Target != "198.51.100.7:19082" {
 		t.Fatalf("lease trigger route round-trip 不符: %+v", got.LeaseTrigger.Routes)
+	}
+}
+
+func TestDisabledLeaseTriggerRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	cfg := conf.Default()
+	cfg.LeaseTrigger.Enabled = false
+	cfg.LeaseTrigger.ListenHost = ""
+	cfg.LeaseTrigger.ListenPort = 0
+	cfg.LeaseTrigger.TrustedProxyCIDRs = []string{"127.0.0.1/32"}
+	cfg.LeaseTrigger.Routes = []conf.TriggerRoute{{Token: "tok", Label: "default", Target: "127.0.0.1:19082", IdleTTL: "3d", IPv4PrefixLen: 24, IPv6PrefixLen: 128}}
+	if err := db.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	got, err := db.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got.LeaseTrigger.Enabled || got.LeaseTrigger.ListenHost != "" || got.LeaseTrigger.ListenPort != 0 {
+		t.Fatalf("停用 trigger 不应被回填监听: %+v", got.LeaseTrigger)
+	}
+	if len(got.LeaseTrigger.Routes) != 1 || got.LeaseTrigger.Routes[0].Token != "tok" {
+		t.Fatalf("停用 trigger 应保留 token 路由: %+v", got.LeaseTrigger.Routes)
+	}
+	if !reflect.DeepEqual(got.LeaseTrigger.TrustedProxyCIDRs, []string{"127.0.0.1/32"}) {
+		t.Fatalf("停用 trigger 应保留反代来源: %+v", got.LeaseTrigger.TrustedProxyCIDRs)
 	}
 }
 
