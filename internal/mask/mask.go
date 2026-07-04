@@ -40,10 +40,11 @@ const (
 )
 
 var (
-	nowFunc            = time.Now
-	readIfaceBytesFunc = readIfaceBytes
-	pullOnceFunc       = pullOnce
-	randomIntnFunc     = cryptoRandIntn
+	nowFunc                = time.Now
+	readIfaceBytesFunc     = readIfaceBytes
+	detectDefaultIfaceFunc = detectDefaultIface
+	pullOnceFunc           = pullOnce
+	randomIntnFunc         = cryptoRandIntn
 )
 
 func validateUDPPayloadBytes(payload int) error {
@@ -270,12 +271,12 @@ func printUsage(w io.Writer) {
   nwall downmask server show                                                                 # 查看服务端监听、密钥和 seed 路径
   nwall downmask server set --tcp HOST:PORT --udp HOST:PORT --token <downmask-key> --seed PATH # 配置服务端
   nwall downmask client show                                                                 # 查看自动拉取策略
-  nwall downmask client set --iface IFACE --min-ratio N --max-ratio N --remote-port PORT --token <downmask-key> # 配置自动拉取
+  nwall downmask client set --min-ratio N --max-ratio N --remote-port PORT --token <downmask-key> # 配置自动拉取；--iface 留空自动探测
   nwall downmask target add <host> [--port PORT] [--weight N] [--token <downmask-key>]       # 添加服务端目标
   nwall downmask target del <host>                                                           # 删除服务端目标
   nwall downmask target list                                                                 # 列出服务端目标
   nwall downmask seed [--path PATH] [--size BYTES]                                           # 生成外部 seed 文件
-  nwall downmask pull --protocol tcp|udp --remote-host HOST --remote-port PORT --token <downmask-key> --wanted-bytes N # 手动拉取
+  nwall downmask pull --protocol tcp|udp --remote-host HOST --remote-port PORT --token <downmask-key> --wanted-bytes 1GB # 手动拉取
   nwall downmask run                                                                         # 立即执行一次自动拉取
   nwall downmask status                                                                      # 查看策略和运行状态
 
@@ -368,7 +369,7 @@ func runConfig(args []string) error {
 	var udpAddr string
 	var token string
 	var seedPath string
-	var maxRate uint64
+	var maxRate string
 	var udpPayload int
 	fs.StringVar(&tcpAddr, "tcp", "", "TCP 监听地址，例 0.0.0.0:15301")
 	fs.StringVar(&tcpAddr, "tcp-addr", "", "兼容旧选项：TCP 监听地址")
@@ -377,7 +378,7 @@ func runConfig(args []string) error {
 	fs.StringVar(&token, "token", "", "下行伪装共享令牌")
 	fs.StringVar(&seedPath, "seed", "", "外部 seed 文件路径")
 	fs.StringVar(&seedPath, "seed-path", "", "外部 seed 文件路径")
-	fs.Uint64Var(&maxRate, "max-rate", 0, "服务端每会话最大发送速率 bytes/s，0 表示不限")
+	fs.StringVar(&maxRate, "max-rate", "0", "服务端每会话最大发送速率，例如 10MB、1GiB、32Mbps；0 表示不限")
 	fs.IntVar(&udpPayload, "udp-payload-bytes", udpDefaultPayload, "UDP 单包 payload 字节")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -414,7 +415,11 @@ func runConfig(args []string) error {
 		cfg.SeedPath = seedPath
 	}
 	if seen["max-rate"] {
-		cfg.MaxRate = maxRate
+		value, err := parseRateBytesPerSecond(maxRate)
+		if err != nil {
+			return fmt.Errorf("--max-rate %w", err)
+		}
+		cfg.MaxRate = value
 	}
 	if seen["udp-payload-bytes"] {
 		if err := validateUDPPayloadBytes(udpPayload); err != nil {
@@ -492,8 +497,8 @@ func runPolicy(args []string) error {
 	tws := fs.String("time-window-start", "", "HH:MM；留空表示全天")
 	twe := fs.String("time-window-end", "", "HH:MM；留空表示全天")
 	maxJitter := fs.Int("max-jitter", -1, "每次拉取后的最大随机等待秒数")
-	minDeficit := fs.Uint64("min-deficit-bytes", 0, "触发拉取的最小缺口字节")
-	maxRun := fs.Uint64("max-bytes-per-run", 0, "单次最大拉取字节")
+	minDeficit := fs.String("min-deficit-bytes", "0", "触发拉取的最小缺口字节，例如 20MB、512MiB")
+	maxRun := fs.String("max-bytes-per-run", "0", "单次最大拉取字节，例如 500MB、1GiB")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -541,10 +546,18 @@ func runPolicy(args []string) error {
 		policy.MaxJitterSeconds = *maxJitter
 	}
 	if seen["min-deficit-bytes"] {
-		policy.MinDeficitBytes = *minDeficit
+		value, err := parseByteAmount(*minDeficit)
+		if err != nil {
+			return fmt.Errorf("--min-deficit-bytes %w", err)
+		}
+		policy.MinDeficitBytes = value
 	}
 	if seen["max-bytes-per-run"] {
-		policy.MaxBytesPerRun = *maxRun
+		value, err := parseByteAmount(*maxRun)
+		if err != nil {
+			return fmt.Errorf("--max-bytes-per-run %w", err)
+		}
+		policy.MaxBytesPerRun = value
 	}
 	if err := db.SaveDownmaskPolicy(policy); err != nil {
 		return err
@@ -576,8 +589,8 @@ func runClientSet(args []string) error {
 	tws := fs.String("time-window-start", "", "HH:MM；留空表示全天")
 	twe := fs.String("time-window-end", "", "HH:MM；留空表示全天")
 	maxJitter := fs.Int("max-jitter", -1, "每次拉取后的最大随机等待秒数")
-	minDeficit := fs.Uint64("min-deficit-bytes", 0, "触发拉取的最小缺口字节")
-	maxRun := fs.Uint64("max-bytes-per-run", 0, "单次最大拉取字节")
+	minDeficit := fs.String("min-deficit-bytes", "0", "触发拉取的最小缺口字节，例如 20MB、512MiB")
+	maxRun := fs.String("max-bytes-per-run", "0", "单次最大拉取字节，例如 500MB、1GiB")
 	protocol := fs.String("protocol", "", "tcp|udp")
 	mode := fs.String("protocol-mode", "", "single|parallel")
 	tcpEnabled := fs.String("tcp-enabled", "", "true|false")
@@ -636,10 +649,18 @@ func runClientSet(args []string) error {
 		policy.MaxJitterSeconds = *maxJitter
 	}
 	if seen["min-deficit-bytes"] {
-		policy.MinDeficitBytes = *minDeficit
+		value, err := parseByteAmount(*minDeficit)
+		if err != nil {
+			return fmt.Errorf("--min-deficit-bytes %w", err)
+		}
+		policy.MinDeficitBytes = value
 	}
 	if seen["max-bytes-per-run"] {
-		policy.MaxBytesPerRun = *maxRun
+		value, err := parseByteAmount(*maxRun)
+		if err != nil {
+			return fmt.Errorf("--max-bytes-per-run %w", err)
+		}
+		policy.MaxBytesPerRun = value
 	}
 	if seen["protocol"] {
 		if err := validateProtocol(*protocol); err != nil {
@@ -1110,9 +1131,11 @@ func reconcileDownmask(db *store.DB) (reconcileResult, error) {
 	if policy.PullMode == "off" {
 		return reconcileResult{Action: "off", Reason: "pull_mode_off"}, nil
 	}
-	if strings.TrimSpace(policy.Iface) == "" {
-		return reconcileResult{}, errors.New("downmask client iface 未设置")
+	iface, err := effectiveDownmaskIface(policy.Iface)
+	if err != nil {
+		return reconcileResult{}, err
 	}
+	policy.Iface = iface
 
 	raw, err := readIfaceBytesFunc(policy.Iface)
 	if err != nil {
@@ -1379,6 +1402,55 @@ func clockMinutes(raw string) int {
 	hour, _ := strconv.Atoi(parts[0])
 	minute, _ := strconv.Atoi(parts[1])
 	return hour*60 + minute
+}
+
+func effectiveDownmaskIface(configured string) (string, error) {
+	iface := strings.TrimSpace(configured)
+	if iface != "" {
+		return iface, nil
+	}
+	iface, err := detectDefaultIfaceFunc()
+	if err != nil {
+		return "", fmt.Errorf("downmask client iface 自动探测失败: %w", err)
+	}
+	return iface, nil
+}
+
+func detectDefaultIface() (string, error) {
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return "", err
+	}
+	type candidate struct {
+		iface  string
+		metric int64
+	}
+	var best *candidate
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 8 || fields[1] != "00000000" {
+			continue
+		}
+		flags, err := strconv.ParseInt(fields[3], 16, 64)
+		if err != nil || flags&0x1 == 0 {
+			continue
+		}
+		metric, err := strconv.ParseInt(fields[6], 10, 64)
+		if err != nil {
+			continue
+		}
+		if fields[0] == "" {
+			continue
+		}
+		if best == nil || metric < best.metric {
+			best = &candidate{iface: fields[0], metric: metric}
+		}
+	}
+	if best == nil {
+		return "", errors.New("未找到默认路由网卡")
+	}
+	return best.iface, nil
 }
 
 func readIfaceBytes(iface string) (ifaceBytes, error) {
@@ -1821,6 +1893,41 @@ func parseRateBytesPerSecond(raw string) (uint64, error) {
 		{suffix: "gb/s", mul: 1000 * 1000 * 1000},
 		{suffix: "mb/s", mul: 1000 * 1000},
 		{suffix: "kb/s", mul: 1000},
+		{suffix: "gib", mul: 1024 * 1024 * 1024},
+		{suffix: "mib", mul: 1024 * 1024},
+		{suffix: "kib", mul: 1024},
+		{suffix: "gb", mul: 1000 * 1000 * 1000},
+		{suffix: "mb", mul: 1000 * 1000},
+		{suffix: "kb", mul: 1000},
+		{suffix: "g", mul: 1024 * 1024 * 1024},
+		{suffix: "m", mul: 1024 * 1024},
+		{suffix: "k", mul: 1024},
+	}
+	for _, unit := range units {
+		if strings.HasSuffix(lower, unit.suffix) {
+			number := strings.TrimSpace(value[:len(value)-len(unit.suffix)])
+			return parseRateNumber(number, unit.mul)
+		}
+	}
+	return strconv.ParseUint(value, 10, 64)
+}
+
+func parseByteAmount(raw string) (uint64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("不能为空")
+	}
+	lower := strings.ToLower(value)
+	units := []struct {
+		suffix string
+		mul    float64
+	}{
+		{suffix: "gib", mul: 1024 * 1024 * 1024},
+		{suffix: "mib", mul: 1024 * 1024},
+		{suffix: "kib", mul: 1024},
+		{suffix: "gb", mul: 1000 * 1000 * 1000},
+		{suffix: "mb", mul: 1000 * 1000},
+		{suffix: "kb", mul: 1000},
 		{suffix: "g", mul: 1024 * 1024 * 1024},
 		{suffix: "m", mul: 1024 * 1024},
 		{suffix: "k", mul: 1024},
@@ -1910,18 +2017,30 @@ func runPull(args []string) error {
 	fs.SetOutput(os.Stderr)
 	var opts pullOptions
 	var timeoutSec int
+	var wantedBytes string
+	var speedLimit string
 	fs.StringVar(&opts.Protocol, "protocol", "tcp", "tcp|udp")
 	fs.StringVar(&opts.RemoteHost, "remote-host", "", "远端主机，建议直填 B 机 IPv4/IPv6")
 	fs.IntVar(&opts.RemotePort, "remote-port", 0, "远端端口")
 	fs.StringVar(&opts.LocalIP, "local-ip", "", "本地源 IP，可选")
 	fs.StringVar(&opts.Token, "token", "", "下行伪装共享令牌，客户端和服务端需一致；可用 openssl rand -hex 16 生成")
-	fs.Uint64Var(&opts.WantedBytes, "wanted-bytes", 0, "目标拉流字节")
-	fs.Uint64Var(&opts.SpeedLimit, "speed-limit", 0, "限速 bytes/s，0 表示不限")
+	fs.StringVar(&wantedBytes, "wanted-bytes", "0", "目标拉流字节，例如 1GB、512MiB")
+	fs.StringVar(&speedLimit, "speed-limit", "0", "限速，例如 10MB、1GiB、32Mbps；0 表示不限")
 	fs.IntVar(&timeoutSec, "timeout", 1200, "超时秒数")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	opts.Timeout = time.Duration(timeoutSec) * time.Second
+	value, err := parseByteAmount(wantedBytes)
+	if err != nil {
+		return fmt.Errorf("--wanted-bytes %w", err)
+	}
+	opts.WantedBytes = value
+	speed, err := parseRateBytesPerSecond(speedLimit)
+	if err != nil {
+		return fmt.Errorf("--speed-limit %w", err)
+	}
+	opts.SpeedLimit = speed
 	if opts.RemoteHost == "" || opts.RemotePort == 0 {
 		return errors.New("--remote-host 和 --remote-port 必填")
 	}
@@ -2170,22 +2289,31 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var opts serveOptions
+	var maxRate string
 	fs.StringVar(&opts.TCPAddr, "tcp-addr", "", "TCP 监听地址，例 0.0.0.0:15301，空表示不启用")
 	fs.StringVar(&opts.UDPAddr, "udp-addr", "", "UDP 监听地址，空表示不启用")
 	fs.StringVar(&opts.Token, "token", "", "下行伪装共享令牌，客户端和服务端需一致；可用 openssl rand -hex 16 生成")
 	fs.StringVar(&opts.SeedFile, "seed-file", "", "高熵种子文件路径；默认生成路径通常为 /var/lib/nwall/downmask/seed.bin")
-	fs.Uint64Var(&opts.MaxRate, "max-rate", 0, "服务端每会话最大发送速率 bytes/s，0 表示不限")
+	fs.StringVar(&maxRate, "max-rate", "0", "服务端每会话最大发送速率，例如 10MB、1GiB、32Mbps；0 表示不限")
 	fs.IntVar(&opts.UDPPayload, "udp-payload-bytes", udpDefaultPayload, "UDP 单包 payload 字节；必须位于 17-65507")
 	fs.StringVar(&opts.StatusFile, "status-file", "", "状态 JSON 文件路径")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	seen := visitedFlags(fs)
 	db, err := applyDBServeDefaults(&opts)
 	if err != nil {
 		return err
 	}
 	if db != nil {
 		defer db.Close()
+	}
+	if seen["max-rate"] {
+		value, err := parseRateBytesPerSecond(maxRate)
+		if err != nil {
+			return fmt.Errorf("--max-rate %w", err)
+		}
+		opts.MaxRate = value
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

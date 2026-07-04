@@ -84,7 +84,7 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err := Run([]string{"lease", "trigger-route", "add", "test-token", "--label", "office", "--target", "198.51.100.7:19082", "--idle-ttl", "3d"}); err != nil {
 		t.Fatalf("lease trigger-route add: %v", err)
 	}
-	if err := Run([]string{"downmask", "server", "set", "--tcp", "127.0.0.1:15301", "--token", "mask-token", "--max-rate", "1024"}); err != nil {
+	if err := Run([]string{"downmask", "server", "set", "--tcp", "127.0.0.1:15301", "--token", "mask-token", "--max-rate", "10MB"}); err != nil {
 		t.Fatalf("downmask server set: %v", err)
 	}
 	if err := Run([]string{"dpi", "http", "on"}); err != nil {
@@ -139,7 +139,7 @@ func TestNewCommandsUpdateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDownmaskConfig: %v", err)
 	}
-	if maskCfg.TCPAddr != "127.0.0.1:15301" || maskCfg.Token != "mask-token" || maskCfg.MaxRate != 1024 {
+	if maskCfg.TCPAddr != "127.0.0.1:15301" || maskCfg.Token != "mask-token" || maskCfg.MaxRate != 10_000_000 {
 		t.Fatalf("downmask config 未写入: %+v", maskCfg)
 	}
 }

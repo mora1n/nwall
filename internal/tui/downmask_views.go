@@ -189,7 +189,7 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setError(err)
 		}
 	case 1:
-		return m.prompt("统计网卡", m.downmaskPolicy.Iface, "例如 eth0；关闭自动拉取时可留空", func(m *model, raw string) error {
+		return m.prompt("统计网卡", m.downmaskPolicy.Iface, "例如 eth0；留空时运行期自动探测默认路由网卡", func(m *model, raw string) error {
 			m.downmaskPolicy.Iface = raw
 			return m.saveDownmaskPolicy("已更新统计网卡")
 		}), nil
@@ -223,8 +223,8 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskPolicy("已更新最大随机等待")
 		}), nil
 	case 5:
-		return m.prompt("最小缺口字节", fmt.Sprint(m.downmaskPolicy.MinDeficitBytes), "输入 >=0 整数", func(m *model, raw string) error {
-			value, err := parseUint64(raw, "min_deficit_bytes")
+		return m.prompt("最小缺口字节", formatByteSize(m.downmaskPolicy.MinDeficitBytes), "例如 20MB、512MiB、1073741824；0 表示不设置门槛", func(m *model, raw string) error {
+			value, err := parseByteSize(raw, "min_deficit_bytes")
 			if err != nil {
 				return err
 			}
@@ -232,8 +232,8 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveDownmaskPolicy("已更新最小缺口")
 		}), nil
 	case 6:
-		return m.prompt("单次最大拉取字节", fmt.Sprint(m.downmaskPolicy.MaxBytesPerRun), "输入 >=0 整数", func(m *model, raw string) error {
-			value, err := parseUint64(raw, "max_bytes_per_run")
+		return m.prompt("单次最大拉取字节", formatByteSize(m.downmaskPolicy.MaxBytesPerRun), "例如 500MB、1GiB、1073741824；0 表示不限制", func(m *model, raw string) error {
+			value, err := parseByteSize(raw, "max_bytes_per_run")
 			if err != nil {
 				return err
 			}
@@ -307,12 +307,12 @@ func (m model) updateDownmaskClient(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) viewDownmaskClient() string {
 	rows := []row{
 		{text: "自动拉取: " + m.downmaskPolicy.PullMode, hint: "Enter 切换是否按下行缺口自动补流量"},
-		{text: "统计网卡: " + valueOrDash(m.downmaskPolicy.Iface), hint: "按该网卡统计真实下行量"},
+		{text: "统计网卡: " + valueOrAuto(m.downmaskPolicy.Iface), hint: "留空时运行期自动探测默认路由网卡"},
 		{text: fmt.Sprintf("每日比例: %.4f - %.4f", m.downmaskPolicy.MinRatio, m.downmaskPolicy.MaxRatio), hint: "每天按区间生成目标伪装比例"},
 		{text: "时间窗口: " + joinNonEmpty(m.downmaskPolicy.TimeWindowStart, m.downmaskPolicy.TimeWindowEnd), hint: "仅在该时间段内拉取，留空全天"},
 		{text: fmt.Sprintf("最大随机等待: %d 秒", m.downmaskPolicy.MaxJitterSeconds), hint: "每次执行前随机延迟上限"},
-		{text: fmt.Sprintf("最小缺口: %d bytes", m.downmaskPolicy.MinDeficitBytes), hint: "低于该缺口不触发拉取"},
-		{text: fmt.Sprintf("单次最大拉取: %d bytes", m.downmaskPolicy.MaxBytesPerRun), hint: "限制一次任务最多补多少流量"},
+		{text: "最小缺口: " + formatByteSize(m.downmaskPolicy.MinDeficitBytes), hint: "低于该缺口不触发拉取"},
+		{text: "单次最大拉取: " + formatByteSize(m.downmaskPolicy.MaxBytesPerRun), hint: "限制一次任务最多补多少流量"},
 		{text: "协议: " + m.downmaskAB.Protocol, hint: "Enter 切换 tcp/udp；UDP 使用服务端 payload"},
 		{text: "协议模式: " + m.downmaskAB.ProtocolMode, hint: "Enter 切换单连接或并行拉取"},
 		{text: fmt.Sprintf("默认远端端口: %d", m.downmaskAB.RemotePort), hint: "目标未填端口时使用，0 表示目标端口"},

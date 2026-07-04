@@ -117,19 +117,38 @@ func parseUint64(raw, name string) (uint64, error) {
 }
 
 func parseByteRate(raw, name string) (uint64, error) {
+	return parseByteQuantity(raw, name, true)
+}
+
+func parseByteSize(raw, name string) (uint64, error) {
+	return parseByteQuantity(raw, name, false)
+}
+
+func parseByteQuantity(raw, name string, allowPerSecond bool) (uint64, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return 0, fmt.Errorf("%s 不能为空", name)
 	}
 	lower := strings.ToLower(value)
-	lower = strings.TrimSuffix(lower, "/s")
+	if strings.HasSuffix(lower, "/s") {
+		if !allowPerSecond {
+			return 0, fmt.Errorf("%s 无效: %s", name, raw)
+		}
+		lower = strings.TrimSuffix(lower, "/s")
+	}
 	units := []struct {
 		suffix string
 		scale  uint64
 	}{
+		{suffix: "gib", scale: 1024 * 1024 * 1024},
+		{suffix: "mib", scale: 1024 * 1024},
+		{suffix: "kib", scale: 1024},
 		{suffix: "gb", scale: 1_000_000_000},
 		{suffix: "mb", scale: 1_000_000},
 		{suffix: "kb", scale: 1_000},
+		{suffix: "g", scale: 1024 * 1024 * 1024},
+		{suffix: "m", scale: 1024 * 1024},
+		{suffix: "k", scale: 1024},
 	}
 	for _, unit := range units {
 		if strings.HasSuffix(lower, unit.suffix) {
@@ -145,6 +164,25 @@ func parseByteRate(raw, name string) (uint64, error) {
 		}
 	}
 	return parseUint64(lower, name)
+}
+
+func formatByteSize(value uint64) string {
+	if value == 0 {
+		return "0"
+	}
+	for _, unit := range []struct {
+		suffix string
+		scale  uint64
+	}{
+		{suffix: "GB", scale: 1_000_000_000},
+		{suffix: "MB", scale: 1_000_000},
+		{suffix: "KB", scale: 1_000},
+	} {
+		if value >= unit.scale && value%unit.scale == 0 {
+			return fmt.Sprintf("%d%s", value/unit.scale, unit.suffix)
+		}
+	}
+	return fmt.Sprintf("%d bytes", value)
 }
 
 func formatByteRate(value uint64) string {

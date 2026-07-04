@@ -405,6 +405,34 @@ func TestParseByteRateAcceptsUnits(t *testing.T) {
 	}
 }
 
+func TestParseByteSizeAcceptsUnits(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want uint64
+	}{
+		{raw: "0", want: 0},
+		{raw: "1048576", want: 1048576},
+		{raw: "20MB", want: 20_000_000},
+		{raw: "1.5GB", want: 1_500_000_000},
+		{raw: "512KiB", want: 512 * 1024},
+		{raw: "2M", want: 2 * 1024 * 1024},
+	}
+	for _, tc := range tests {
+		got, err := parseByteSize(tc.raw, "bytes")
+		if err != nil {
+			t.Fatalf("parseByteSize(%q): %v", tc.raw, err)
+		}
+		if got != tc.want {
+			t.Fatalf("parseByteSize(%q)=%d want=%d", tc.raw, got, tc.want)
+		}
+	}
+	for _, raw := range []string{"", "10MB/s", "-1MB", "abc"} {
+		if _, err := parseByteSize(raw, "bytes"); err == nil {
+			t.Fatalf("parseByteSize(%q) should fail", raw)
+		}
+	}
+}
+
 func TestParseCIDRListCanonicalizesSingleIPs(t *testing.T) {
 	got, err := parseCIDRList("127.0.0.1, 2001:db8::1")
 	if err != nil {
@@ -889,6 +917,21 @@ func TestLeaseRouteWordingExplainsTemporaryAllow(t *testing.T) {
 		if !strings.Contains(view, "临时放行") {
 			t.Fatalf("%s should explain temporary allow routes:\n%s", name, view)
 		}
+	}
+}
+
+func TestInputAcceptsSpaceKey(t *testing.T) {
+	m := model{mode: viewInput, input: inputState{value: "1200"}}
+	next, _ := m.updateInput(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	got := next.(model)
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	got = next.(model)
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	got = next.(model)
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("12")})
+	got = next.(model)
+	if got.input.value != "1200 2 12" {
+		t.Fatalf("input value = %q, want %q", got.input.value, "1200 2 12")
 	}
 }
 

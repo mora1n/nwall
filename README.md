@@ -206,10 +206,12 @@ nwall reload
 客户端自动拉取：
 
 ```bash
-nwall downmask client set --iface eth0 --min-ratio 1.5 --max-ratio 2.0 --min-deficit-bytes 20971520 --max-bytes-per-run 524288000 --max-jitter 60 --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token "$DOWNMASK_KEY" --speed-limit 4M --timeout 300 --speed-jitter-percent 12 --bytes-jitter-percent 18
+nwall downmask client set --min-ratio 1.5 --max-ratio 2.0 --min-deficit-bytes 20MB --max-bytes-per-run 500MB --max-jitter 60 --protocol-mode parallel --tcp-enabled true --udp-enabled true --remote-port 15301 --token "$DOWNMASK_KEY" --speed-limit 4M --timeout 300 --speed-jitter-percent 12 --bytes-jitter-percent 18
 nwall downmask target add 192.0.2.20 --weight 1
 nwall reload
 ```
+
+`--iface` 可省略或留空，自动拉取运行时会按默认路由自动探测统计网卡；多出口机器建议显式指定，例如 `--iface eth0`。
 
 多目标：
 
@@ -222,7 +224,7 @@ nwall downmask target list
 手动拉取和状态：
 
 ```bash
-nwall downmask pull --protocol tcp --remote-host 192.0.2.20 --remote-port 15301 --token "$DOWNMASK_KEY" --wanted-bytes 1073741824
+nwall downmask pull --protocol tcp --remote-host 192.0.2.20 --remote-port 15301 --token "$DOWNMASK_KEY" --wanted-bytes 1GB
 nwall downmask run
 nwall downmask status
 ```

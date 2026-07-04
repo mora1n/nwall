@@ -174,12 +174,16 @@ func TestPullIntegration(t *testing.T) {
 			stdout, restore := captureStdout(t)
 			defer restore()
 
+			wantedArg := strconv.FormatUint(tc.wanted, 10)
+			if tc.wanted == 1500 {
+				wantedArg = "1.5KB"
+			}
 			args := []string{
 				"--protocol", tc.protocol,
 				"--remote-host", "127.0.0.1",
 				"--remote-port", strconv.Itoa(port),
 				"--token", tc.token,
-				"--wanted-bytes", strconv.FormatUint(tc.wanted, 10),
+				"--wanted-bytes", wantedArg,
 				"--timeout", "3",
 			}
 			if err := runPull(args); err != nil {
@@ -492,6 +496,8 @@ func TestParseRateBytesPerSecond(t *testing.T) {
 		{raw: "1.5M", want: 1572864},
 		{raw: "32Mbps", want: 4000000},
 		{raw: "2MB/s", want: 2000000},
+		{raw: "10MB", want: 10_000_000},
+		{raw: "1GiB", want: 1024 * 1024 * 1024},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -506,10 +512,40 @@ func TestParseRateBytesPerSecond(t *testing.T) {
 	}
 }
 
+func TestParseByteAmount(t *testing.T) {
+	testCases := []struct {
+		raw  string
+		want uint64
+	}{
+		{raw: "0", want: 0},
+		{raw: "4096", want: 4096},
+		{raw: "20MB", want: 20_000_000},
+		{raw: "1.5GB", want: 1_500_000_000},
+		{raw: "512MiB", want: 512 * 1024 * 1024},
+		{raw: "2M", want: 2 * 1024 * 1024},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := parseByteAmount(tc.raw)
+			if err != nil {
+				t.Fatalf("parseByteAmount(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseByteAmount(%q) = %d, want %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+	for _, raw := range []string{"", "-1MB", "abc"} {
+		if _, err := parseByteAmount(raw); err == nil {
+			t.Fatalf("parseByteAmount(%q) should fail", raw)
+		}
+	}
+}
+
 func TestDownmaskPolicyAndABPullCommandsUpdateDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "nwall.db")
 	t.Setenv("NWALL_DB", dbPath)
-	if err := runPolicy([]string{"set", "--pull-mode", "ab", "--iface", "eth0", "--min-ratio", "1.5", "--max-ratio", "2", "--max-jitter", "0", "--min-deficit-bytes", "1024", "--max-bytes-per-run", "2048"}); err != nil {
+	if err := runPolicy([]string{"set", "--pull-mode", "ab", "--iface", "eth0", "--min-ratio", "1.5", "--max-ratio", "2", "--max-jitter", "0", "--min-deficit-bytes", "20MB", "--max-bytes-per-run", "500MB"}); err != nil {
 		t.Fatalf("runPolicy: %v", err)
 	}
 	if err := runABPullSet([]string{"--protocol-mode", "parallel", "--tcp-enabled", "true", "--udp-enabled", "true", "--remote-port", "15301", "--token", "test-token", "--speed-limit", "4M", "--timeout", "30"}); err != nil {
@@ -527,7 +563,7 @@ func TestDownmaskPolicyAndABPullCommandsUpdateDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.PullMode != "ab" || policy.Iface != "eth0" || policy.MinDeficitBytes != 1024 {
+	if policy.PullMode != "ab" || policy.Iface != "eth0" || policy.MinDeficitBytes != 20_000_000 || policy.MaxBytesPerRun != 500_000_000 {
 		t.Fatalf("policy mismatch: %+v", policy)
 	}
 	cfg, err := db.LoadDownmaskABPullConfig()
@@ -582,6 +618,88 @@ func TestReconcileSkipsBelowMinDeficit(t *testing.T) {
 	}
 	if state.RXAccum != 100 || state.TXAccum != 200 || state.LastError != "below_min_deficit" {
 		t.Fatalf("state mismatch: %+v", state)
+	}
+}
+
+func TestReconcileAutoDetectsIfaceWhenEmpty(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSavePolicy(t, db, store.DownmaskPolicy{
+		PullMode:        "ab",
+		Iface:           "",
+		MinRatio:        1.5,
+		MaxRatio:        1.5,
+		MinDeficitBytes: 1024,
+	})
+	readIface := ""
+	withMaskHooks(t, hookConfig{
+		now: func() time.Time { return time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC) },
+		detect: func() (string, error) {
+			return "eth0", nil
+		},
+		read: func(iface string) (ifaceBytes, error) {
+			readIface = iface
+			return ifaceBytes{RX: 1000, TX: 1000}, nil
+		},
+	})
+
+	result, err := reconcileDownmask(db)
+	if err != nil {
+		t.Fatalf("reconcileDownmask: %v", err)
+	}
+	if readIface != "eth0" || result.Iface != "eth0" {
+		t.Fatalf("iface mismatch read=%q result=%q", readIface, result.Iface)
+	}
+	state, ok, err := db.LoadDownmaskDayState()
+	if err != nil || !ok {
+		t.Fatalf("LoadDownmaskDayState ok=%v err=%v", ok, err)
+	}
+	if state.Iface != "eth0" {
+		t.Fatalf("state iface = %q, want eth0", state.Iface)
+	}
+}
+
+func TestReconcileUsesExplicitIfaceWithoutDetect(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSavePolicy(t, db, store.DownmaskPolicy{
+		PullMode:        "ab",
+		Iface:           "eth1",
+		MinRatio:        1.5,
+		MaxRatio:        1.5,
+		MinDeficitBytes: 1024,
+	})
+	readIface := ""
+	withMaskHooks(t, hookConfig{
+		now: func() time.Time { return time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC) },
+		detect: func() (string, error) {
+			return "", errors.New("detector should not be called")
+		},
+		read: func(iface string) (ifaceBytes, error) {
+			readIface = iface
+			return ifaceBytes{RX: 1000, TX: 1000}, nil
+		},
+	})
+
+	result, err := reconcileDownmask(db)
+	if err != nil {
+		t.Fatalf("reconcileDownmask: %v", err)
+	}
+	if readIface != "eth1" || result.Iface != "eth1" {
+		t.Fatalf("iface mismatch read=%q result=%q", readIface, result.Iface)
+	}
+}
+
+func TestReconcileFailsWhenIfaceAutoDetectFails(t *testing.T) {
+	db := openMaskTestDB(t)
+	mustSavePolicy(t, db, store.DownmaskPolicy{PullMode: "ab", MinRatio: 1.5, MaxRatio: 1.5})
+	withMaskHooks(t, hookConfig{
+		detect: func() (string, error) {
+			return "", errors.New("no default route")
+		},
+	})
+
+	_, err := reconcileDownmask(db)
+	if err == nil || !strings.Contains(err.Error(), "自动探测失败") {
+		t.Fatalf("error = %v, want auto detect failure", err)
 	}
 }
 
@@ -780,6 +898,7 @@ func writeTestSeedFile(t *testing.T, dir string) string {
 type hookConfig struct {
 	now        func() time.Time
 	read       func(string) (ifaceBytes, error)
+	detect     func() (string, error)
 	pull       func(pullOptions) (uint64, error)
 	randomIntn func(int) (int, error)
 }
@@ -788,6 +907,7 @@ func withMaskHooks(t *testing.T, cfg hookConfig) {
 	t.Helper()
 	oldNow := nowFunc
 	oldRead := readIfaceBytesFunc
+	oldDetect := detectDefaultIfaceFunc
 	oldPull := pullOnceFunc
 	oldRandom := randomIntnFunc
 	if cfg.now != nil {
@@ -795,6 +915,9 @@ func withMaskHooks(t *testing.T, cfg hookConfig) {
 	}
 	if cfg.read != nil {
 		readIfaceBytesFunc = cfg.read
+	}
+	if cfg.detect != nil {
+		detectDefaultIfaceFunc = cfg.detect
 	}
 	if cfg.pull != nil {
 		pullOnceFunc = cfg.pull
@@ -805,6 +928,7 @@ func withMaskHooks(t *testing.T, cfg hookConfig) {
 	t.Cleanup(func() {
 		nowFunc = oldNow
 		readIfaceBytesFunc = oldRead
+		detectDefaultIfaceFunc = oldDetect
 		pullOnceFunc = oldPull
 		randomIntnFunc = oldRandom
 	})

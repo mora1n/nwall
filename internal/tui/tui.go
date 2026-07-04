@@ -475,7 +475,7 @@ func (m model) updateInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "backspace", "ctrl+h":
 		m.input.value = trimLastRune(m.input.value)
 	default:
-		if key.Type == tea.KeyRunes {
+		if key.Type == tea.KeyRunes || key.Type == tea.KeySpace {
 			m.input.value += string(key.Runes)
 		}
 	}
@@ -525,6 +525,13 @@ func mark(v bool) string {
 func valueOrDash(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "-"
+	}
+	return value
+}
+
+func valueOrAuto(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "自动探测"
 	}
 	return value
 }
