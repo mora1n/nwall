@@ -509,6 +509,28 @@ func TestListEntryHintsDescribePurpose(t *testing.T) {
 	}
 }
 
+func TestLeaseMenuPromotesTCPLeaseWorkflow(t *testing.T) {
+	m := model{cfg: conf.Default()}
+	view := m.viewLease()
+	for _, want := range []string{
+		"共享 key",
+		"安装机接收租约监听",
+		"临时放行路由",
+		"允许发送租约到本机",
+		"token 触发器监听",
+		"token 路由",
+		"反代真实 IP 来源",
+		"高级参数",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("lease menu missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "公网 token 触发器 / 连接来源") {
+		t.Fatalf("lease menu should not hide token routes under old combined entry:\n%s", view)
+	}
+}
+
 func TestGuardedPortListAddsDeletesAndClears(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	store.cfg.Protect.GuardedPorts = nil
@@ -641,8 +663,8 @@ func TestEgressCustomCIDRListAddsAndClears(t *testing.T) {
 
 func TestLeaseTrustedRelayListAddsEditsAndBatchDeletes(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
-	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 2}
-	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 3}
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.mode != viewLeaseTrustedRelays {
 		t.Fatalf("allowed lease sender should enter list, mode=%v", got.mode)
@@ -683,8 +705,8 @@ func TestLeaseTrustedRelayListAddsEditsAndBatchDeletes(t *testing.T) {
 
 func TestLeaseTrustedProxyListAddsAndBatchDeletes(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
-	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 3}
-	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 6}
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.mode != viewLeaseTrustedProxies {
 		t.Fatalf("trusted proxy should enter list, mode=%v", got.mode)
@@ -717,9 +739,9 @@ func TestLeaseTriggerListenDeleteDisablesAndPreservesConfig(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	store.cfg.LeaseTrigger.TrustedProxyCIDRs = []string{"127.0.0.1/32"}
 	store.cfg.LeaseTrigger.Routes = []conf.TriggerRoute{{Token: "tok", Label: "default", Target: "127.0.0.1:19082", IdleTTL: "3d", IPv4PrefixLen: 24, IPv6PrefixLen: 128}}
-	m := model{db: store, cfg: store.cfg, mode: viewLeaseTrigger, cursor: 0}
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 4}
 
-	next, _ := m.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	got := next.(model)
 	if store.cfg.LeaseTrigger.Enabled || store.cfg.LeaseTrigger.ListenHost != "" || store.cfg.LeaseTrigger.ListenPort != 0 {
 		t.Fatalf("trigger listen delete should disable and clear listen: %+v", store.cfg.LeaseTrigger)
@@ -727,11 +749,11 @@ func TestLeaseTriggerListenDeleteDisablesAndPreservesConfig(t *testing.T) {
 	if len(store.cfg.LeaseTrigger.Routes) != 1 || len(store.cfg.LeaseTrigger.TrustedProxyCIDRs) != 1 {
 		t.Fatalf("trigger listen delete should preserve routes and proxies: %+v", store.cfg.LeaseTrigger)
 	}
-	if !strings.Contains(got.viewLeaseTrigger(), "监听: -") {
-		t.Fatalf("disabled trigger listen should render dash:\n%s", got.viewLeaseTrigger())
+	if !strings.Contains(got.viewLease(), "token 触发器监听: -") {
+		t.Fatalf("disabled trigger listen should render dash:\n%s", got.viewLease())
 	}
 
-	next, _ = got.updateLeaseTrigger(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(model)
 	if got.input.value != "" {
 		t.Fatalf("disabled trigger listen prompt should start empty, got %q", got.input.value)
@@ -747,7 +769,7 @@ func TestLeaseTriggerListenDeleteDisablesAndPreservesConfig(t *testing.T) {
 func TestLeaseKeyPromptKeepsExistingValue(t *testing.T) {
 	store := &fakeStore{cfg: conf.Default()}
 	store.cfg.Lease.LeaseKey = "secret"
-	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 1}
+	m := model{db: store, cfg: store.cfg, mode: viewLease, cursor: 0}
 	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.input.value != "secret" {
@@ -814,7 +836,13 @@ func TestTriggerRouteWizardAddsRoute(t *testing.T) {
 	m := model{db: store, cfg: store.cfg, mode: viewLeaseTriggerRoutes}
 	next, _ := m.updateLeaseTriggerRoutes(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	got := next.(model)
-	for _, value := range []string{"tok", "default", "127.0.0.1:19082", "3d", "24", "128"} {
+	got.input.value = "tok"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if !strings.Contains(got.input.help, "安装机上的临时放行路由名") || !strings.Contains(got.input.help, "本机没有临时放行路由") {
+		t.Fatalf("trigger route label help should allow relay without local route:\n%s", got.input.help)
+	}
+	for _, value := range []string{"default", "127.0.0.1:19082", "3d", "24", "128"} {
 		got.input.value = value
 		next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
 		got = next.(model)
@@ -825,6 +853,28 @@ func TestTriggerRouteWizardAddsRoute(t *testing.T) {
 	route := store.cfg.LeaseTrigger.Routes[0]
 	if route.Token != "tok" || route.Label != "default" || route.Target != "127.0.0.1:19082" || route.IdleTTL != "3d" || route.IPv4PrefixLen != 24 || route.IPv6PrefixLen != 128 {
 		t.Fatalf("trigger route mismatch: %+v", route)
+	}
+}
+
+func TestTriggerRouteViewWarnsUntilListenConfigured(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	store.cfg.Lease.LeaseKey = "secret"
+	store.cfg.LeaseTrigger.Enabled = false
+	store.cfg.LeaseTrigger.ListenHost = ""
+	store.cfg.LeaseTrigger.ListenPort = 0
+	m := model{db: store, cfg: store.cfg}
+	view := m.viewLeaseTriggerRoutes()
+	if !strings.Contains(view, "未设置 token 触发器监听，token 路由不会对外生效") {
+		t.Fatalf("trigger route view should warn when listen is missing:\n%s", view)
+	}
+
+	store.cfg.LeaseTrigger.Enabled = true
+	store.cfg.LeaseTrigger.ListenHost = "127.0.0.1"
+	store.cfg.LeaseTrigger.ListenPort = 19081
+	m.cfg = store.cfg
+	view = m.viewLeaseTriggerRoutes()
+	if strings.Contains(view, "未设置 token 触发器监听") {
+		t.Fatalf("trigger route warning should disappear after listen configured:\n%s", view)
 	}
 }
 
@@ -952,7 +1002,7 @@ func TestKeysAreVisibleInTUI(t *testing.T) {
 
 func TestLeaseKeyPromptGeneratesOnEmptyInput(t *testing.T) {
 	fs := &fakeStore{cfg: conf.Default()}
-	m := model{db: fs, cfg: fs.cfg, mode: viewLease, cursor: 1}
+	m := model{db: fs, cfg: fs.cfg, mode: viewLease, cursor: 0}
 	next, _ := m.updateLease(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
 	if got.mode != viewInput || !strings.Contains(got.input.help, "nwall lease keygen") {
@@ -1029,7 +1079,8 @@ func TestLeaseAndDownmaskViewsExplainEditableFields(t *testing.T) {
 	}
 	for name, view := range map[string]string{
 		"lease":          m.viewLease(),
-		"leaseTrigger":   m.viewLeaseTrigger(),
+		"leaseRoutes":    m.viewLeaseTriggerRoutes(),
+		"leaseAdvanced":  m.viewLeaseAdvanced(),
 		"downmaskServer": m.viewDownmaskServer(),
 		"downmaskClient": m.viewDownmaskClient(),
 	} {
@@ -1039,7 +1090,7 @@ func TestLeaseAndDownmaskViewsExplainEditableFields(t *testing.T) {
 			}
 		}
 	}
-	combined := m.viewLease() + m.viewLeaseTrigger() + m.viewDownmaskServer() + m.viewDownmaskClient()
+	combined := m.viewLease() + m.viewLeaseTriggerRoutes() + m.viewLeaseAdvanced() + m.viewDownmaskServer() + m.viewDownmaskClient()
 	for _, want := range []string{
 		"留空自动生成",
 		"公网 token",
