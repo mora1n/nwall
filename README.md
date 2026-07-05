@@ -6,7 +6,7 @@
 
 - 执行 `nwall` 默认打开 TUI；不用编辑配置文件
 - 配置、运行态、回滚快照和 nonce 保存在 `/var/lib/nwall/nwall.db`
-- 入站白名单支持本机端口和 DNAT 入站转发，按省份、城市、自定义 CIDR、单端口覆盖放行
+- 入站白名单支持本机端口和 DNAT 入站转发，按省份、城市、自定义 CIDR、端口覆盖放行
 - TCP 租约默认放行来源 IPv4 的 `/24`，可用 `mask=32` 改为单 IP
 - 下行伪装支持服务端发流、客户端按 RX/TX 缺口自动拉取
 - systemd 只需要一个 `nwall.service`
@@ -94,6 +94,7 @@ nwall ingress cn select 广东省 四川省
 nwall ingress city add 440100 440300 510100
 nwall ingress custom add 198.51.100.0/24
 nwall ingress port 443 city add 440100 440300
+nwall ingress port 443,8443,10000-10010 cn off
 nwall protect apply --confirm
 nwall reload
 ```
@@ -102,7 +103,7 @@ nwall reload
 
 - `440100 440300 510100` 示例为广州、深圳、成都
 - 选中省份后，同省城市会被省份 IP 段覆盖
-- `ingress port 443 ...` 只影响指定端口
+- `ingress port 443 ...` 只影响指定端口；也可用 `443,8443,10000-10010` 批量设置多个端口或连续端口
 - DNAT 转发按公网原始端口匹配，例如公网 `41423 -> 后端:40422` 应配置 `41423`，不是后端端口 `40422`
 - `open_ports` 同样按公网原始端口公开放行 DNAT 转发入口；未公开的 DNAT 新连接会进入白名单判定，未命中则 drop
 - 入站白名单关闭时只关闭来源限制；已开启的 HTTP/TLS/SOCKS 协议封锁仍会检查受保护流量

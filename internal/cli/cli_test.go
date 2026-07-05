@@ -55,6 +55,80 @@ func TestIngressCityAndPortCommandsUpdateConfig(t *testing.T) {
 	if len(got.Ingress.PortPolicies) != 0 {
 		t.Fatalf("端口策略应已清除: %+v", got.Ingress.PortPolicies)
 	}
+
+	if err := Run([]string{"ingress", "port", "8443,9443,10000-10001", "cn", "off"}); err != nil {
+		t.Fatalf("ingress port multi cn off: %v", err)
+	}
+	if err := Run([]string{"ingress", "port", "8443,9443", "city", "add", code}); err != nil {
+		t.Fatalf("ingress port multi city add: %v", err)
+	}
+	got, err = db.LoadConfig()
+	if err != nil {
+		t.Fatalf("Load after multi port: %v", err)
+	}
+	wantPorts := []int{8443, 9443, 10000, 10001}
+	if len(got.Ingress.PortPolicies) != len(wantPorts) {
+		t.Fatalf("端口策略数量不符: %+v", got.Ingress.PortPolicies)
+	}
+	byPort := map[int]conf.PortPolicy{}
+	for _, policy := range got.Ingress.PortPolicies {
+		byPort[policy.ListenPort] = policy
+	}
+	for _, port := range wantPorts {
+		policy, ok := byPort[port]
+		if !ok {
+			t.Fatalf("missing port policy %d in %+v", port, got.Ingress.PortPolicies)
+		}
+		if policy.CNMode != "off" {
+			t.Fatalf("port %d mode mismatch: %+v", port, policy)
+		}
+		if (port == 8443 || port == 9443) && (len(policy.CNCityCodes) != 1 || policy.CNCityCodes[0] != code) {
+			t.Fatalf("port %d city mismatch: %+v", port, policy)
+		}
+	}
+	if err := Run([]string{"ingress", "port", "8443,9443,10000-10001", "clear"}); err != nil {
+		t.Fatalf("ingress port multi clear: %v", err)
+	}
+	got, err = db.LoadConfig()
+	if err != nil {
+		t.Fatalf("Load after multi clear: %v", err)
+	}
+	if len(got.Ingress.PortPolicies) != 0 {
+		t.Fatalf("端口策略应已批量清除: %+v", got.Ingress.PortPolicies)
+	}
+}
+
+func TestIngressPortBatchClearRejectsPartialMissing(t *testing.T) {
+	db := setupTestDB(t)
+	if err := Run([]string{"ingress", "port", "8443", "cn", "off"}); err != nil {
+		t.Fatalf("ingress port cn off: %v", err)
+	}
+	if err := Run([]string{"ingress", "port", "8443,9443", "clear"}); err == nil {
+		t.Fatal("batch clear should reject partial missing ports")
+	}
+	got, err := db.LoadConfig()
+	if err != nil {
+		t.Fatalf("Load after failed clear: %v", err)
+	}
+	if len(got.Ingress.PortPolicies) != 1 || got.Ingress.PortPolicies[0].ListenPort != 8443 {
+		t.Fatalf("failed batch clear should not mutate policies: %+v", got.Ingress.PortPolicies)
+	}
+}
+
+func TestParsePortSelectionAcceptsListsAndRanges(t *testing.T) {
+	got, err := parsePortSelection("443,8443,10000-10002,8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{443, 8443, 10000, 10001, 10002}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("port selection mismatch got=%v want=%v", got, want)
+	}
+	for _, raw := range []string{"", "0", "65536", "9000-8000", "1-2-3"} {
+		if _, err := parsePortSelection(raw); err == nil {
+			t.Fatalf("parsePortSelection(%q) should fail", raw)
+		}
+	}
 }
 
 func TestNewCommandsUpdateConfig(t *testing.T) {

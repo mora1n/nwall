@@ -323,7 +323,7 @@ func printUsage(w *os.File) {
   nwall ingress cn off|all|list|select <省份...>       # 配置全局入站中国省份白名单
   nwall ingress city add 440100 440300 510100          # 添加多个城市白名单；推荐用 TUI 按省/市选择
   nwall ingress custom add|del|list <IP/CIDR...>       # 管理自定义入站 CIDR
-  nwall ingress port <port> cn|city|status|clear ...   # 管理单端口入站覆盖策略
+  nwall ingress port <port|ports> cn|city|status|clear ... # 管理端口覆盖策略，支持 443,8443,10000-10010
   nwall egress enable|disable|status                   # 开关/查看出站白名单
   nwall egress cn off|all|list|select <省份...>        # 配置出站中国省份白名单
   nwall egress custom add|del|list <IP/CIDR...>        # 管理自定义出站 CIDR

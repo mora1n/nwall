@@ -205,12 +205,16 @@ func (m model) updateIngressPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "a":
-		return m.prompt("新增端口覆盖策略", "", "输入监听端口，例如 443", func(m *model, raw string) error {
-			port, err := parsePort(raw)
+		return m.prompt("新增端口覆盖策略", "", "输入监听端口，支持 443、443,8443、10000-10010", func(m *model, raw string) error {
+			ports, err := parsePortSelection(raw)
 			if err != nil {
 				return err
 			}
-			m.portDraft = portPolicyDraft{active: true, policy: conf.PortPolicy{ListenPort: port, CNMode: "provinces"}}
+			m.portDraft = portPolicyDraft{
+				active: true,
+				ports:  ports,
+				policy: conf.PortPolicy{ListenPort: ports[0], CNMode: "provinces"},
+			}
 			m.mode = viewPortPolicyMode
 			m.cursor = 0
 			return nil
@@ -233,7 +237,7 @@ func (m model) updateIngressPorts(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		policy := clonePortPolicy(m.cfg.Ingress.PortPolicies[m.cursor])
-		m.portDraft = portPolicyDraft{active: true, edit: true, old: policy.ListenPort, policy: policy}
+		m.portDraft = portPolicyDraft{active: true, edit: true, old: policy.ListenPort, ports: []int{policy.ListenPort}, policy: policy}
 		m.mode = viewPortPolicyMode
 		m.cursor = cnModeCursor(policy.CNMode)
 		m.status = ""
@@ -292,7 +296,7 @@ func (m model) viewPortPolicyMode() string {
 		{text: "all", hint: "允许 CN 全部地区", detail: "Enter 保存；该端口允许 CN 全量 IP 段。"},
 		{text: "provinces", hint: "选择省份/城市", detail: "Enter 进入省市树；选择后保存该端口的覆盖策略。"},
 	}
-	return m.renderRows(fmt.Sprintf("端口覆盖 / %d / 模式", m.portDraft.policy.ListenPort), rows, "Enter 选择当前项 • 输入序号后 Enter • 0/Esc 返回")
+	return m.renderRows(fmt.Sprintf("端口覆盖 / %s / 模式", m.portPolicyDraftPortsSummary()), rows, "Enter 选择当前项 • 输入序号后 Enter • 0/Esc 返回")
 }
 
 func (m model) updatePortPolicyRegions(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -335,7 +339,7 @@ func (m model) viewPortPolicyRegions() string {
 	for _, p := range provs {
 		rows = append(rows, row{text: fmt.Sprintf("[%s] %s", mark(contains(m.portDraft.policy.CNProvinces, p)), p), detail: "Enter 进入该省城市；s 保存端口覆盖策略。"})
 	}
-	return m.renderRowsWithIntro(fmt.Sprintf("端口覆盖 / %d / 选择省份", m.portDraft.policy.ListenPort), rows, "s. 保存并返回", "输入序号后 Enter 进入省份 • s 保存 • 0 返回")
+	return m.renderRowsWithIntro(fmt.Sprintf("端口覆盖 / %s / 选择省份", m.portPolicyDraftPortsSummary()), rows, "s. 保存并返回", "输入序号后 Enter 进入省份 • s 保存 • 0 返回")
 }
 
 func (m model) updatePortPolicyProvince(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -387,7 +391,7 @@ func (m model) viewPortPolicyProvince() string {
 		}
 		rows = append(rows, row{text: fmt.Sprintf("[%s] %s  %s", state, city.Name, city.Code), detail: "Enter 选择/取消城市；s 保存端口覆盖策略。"})
 	}
-	out := m.renderRows(fmt.Sprintf("端口覆盖 / %d / %s", m.portDraft.policy.ListenPort, m.province), rows, "输入序号后 Enter 选择 • 1 省份 • 2... 城市 • s 保存 • 0 返回")
+	out := m.renderRows(fmt.Sprintf("端口覆盖 / %s / %s", m.portPolicyDraftPortsSummary(), m.province), rows, "输入序号后 Enter 选择 • 1 省份 • 2... 城市 • s 保存 • 0 返回")
 	if provSelected {
 		out += "\n" + warnStyle.Render("已选择整个省份；该省城市由省份 IP 段覆盖，不单独保存。")
 	}
@@ -438,17 +442,32 @@ func (m *model) savePortPolicyDraft() error {
 		policy.CNProvinces = nil
 		policy.CNCityCodes = nil
 	}
+	ports := append([]int(nil), m.portDraft.ports...)
+	if len(ports) == 0 {
+		ports = []int{policy.ListenPort}
+	}
 	if m.portDraft.edit {
 		m.cfg.Ingress.PortPolicies = removePortPolicy(m.cfg.Ingress.PortPolicies, m.portDraft.old)
 	}
-	m.cfg.Ingress.PortPolicies = upsertPortPolicy(m.cfg.Ingress.PortPolicies, policy)
+	for _, port := range ports {
+		next := clonePortPolicy(policy)
+		next.ListenPort = port
+		m.cfg.Ingress.PortPolicies = upsertPortPolicy(m.cfg.Ingress.PortPolicies, next)
+	}
 	m.portDraft = portPolicyDraft{}
-	if err := m.saveConfig("已更新端口覆盖策略"); err != nil {
+	if err := m.saveConfig(fmt.Sprintf("已更新 %d 个端口覆盖策略", len(ports))); err != nil {
 		return err
 	}
 	m.mode = viewIngressPorts
 	m.cursor = 0
 	return nil
+}
+
+func (m model) portPolicyDraftPortsSummary() string {
+	if len(m.portDraft.ports) > 0 {
+		return portSelectionSummary(m.portDraft.ports)
+	}
+	return fmt.Sprint(m.portDraft.policy.ListenPort)
 }
 
 func cnModeCursor(mode string) int {

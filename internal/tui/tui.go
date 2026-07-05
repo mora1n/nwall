@@ -109,6 +109,7 @@ type portPolicyDraft struct {
 	active bool
 	edit   bool
 	old    int
+	ports  []int
 	policy conf.PortPolicy
 }
 

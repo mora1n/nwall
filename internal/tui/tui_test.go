@@ -377,6 +377,22 @@ func TestParsePortListAllowsEmptyInput(t *testing.T) {
 	}
 }
 
+func TestParsePortSelectionAcceptsSinglesListsAndRanges(t *testing.T) {
+	got, err := parsePortSelection("443,8443,10000-10002 8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{443, 8443, 10000, 10001, 10002}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("port selection mismatch got=%v want=%v", got, want)
+	}
+	for _, raw := range []string{"", "0", "65536", "9000-8000", "1-2-3"} {
+		if _, err := parsePortSelection(raw); err == nil {
+			t.Fatalf("parsePortSelection(%q) should fail", raw)
+		}
+	}
+}
+
 func TestParseByteRateAcceptsUnits(t *testing.T) {
 	tests := []struct {
 		raw  string
@@ -1166,6 +1182,35 @@ func TestPortPolicyWizardSavesOffMode(t *testing.T) {
 	}
 }
 
+func TestPortPolicyWizardSavesMultiplePorts(t *testing.T) {
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, geo: mustGeo(t), mode: viewIngressPorts}
+	next, _ := m.updateIngressPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "8443,9443,10000-10001"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if got.mode != viewPortPolicyMode || !strings.Contains(got.viewPortPolicyMode(), "8443,9443,10000-10001") {
+		t.Fatalf("输入多端口后应进入模式选择并展示端口摘要，mode=%v view=\n%s", got.mode, got.viewPortPolicyMode())
+	}
+	next, _ = got.updatePortPolicyMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got = next.(model)
+	wantPorts := []int{8443, 9443, 10000, 10001}
+	if len(store.cfg.Ingress.PortPolicies) != len(wantPorts) {
+		t.Fatalf("policy count mismatch: %+v", store.cfg.Ingress.PortPolicies)
+	}
+	gotPorts := make([]int, 0, len(store.cfg.Ingress.PortPolicies))
+	for _, policy := range store.cfg.Ingress.PortPolicies {
+		if policy.CNMode != "off" {
+			t.Fatalf("mode mismatch: %+v", policy)
+		}
+		gotPorts = append(gotPorts, policy.ListenPort)
+	}
+	if !reflect.DeepEqual(gotPorts, wantPorts) {
+		t.Fatalf("ports mismatch got=%v want=%v", gotPorts, wantPorts)
+	}
+}
+
 func TestPortPolicyWizardSelectsProvince(t *testing.T) {
 	gdb := mustGeo(t)
 	store := &fakeStore{cfg: conf.Default()}
@@ -1191,6 +1236,35 @@ func TestPortPolicyWizardSelectsProvince(t *testing.T) {
 	policy := store.cfg.Ingress.PortPolicies[0]
 	if policy.CNMode != "provinces" || len(policy.CNProvinces) != 1 || policy.CNProvinces[0] != "广东省" {
 		t.Fatalf("province policy mismatch: %+v", policy)
+	}
+}
+
+func TestPortPolicyWizardSelectsProvinceForMultiplePorts(t *testing.T) {
+	gdb := mustGeo(t)
+	store := &fakeStore{cfg: conf.Default()}
+	m := model{db: store, cfg: store.cfg, geo: gdb, mode: viewIngressPorts}
+	next, _ := m.updateIngressPorts(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := next.(model)
+	got.input.value = "8443,9443"
+	next, _ = got.updateInput(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	next, _ = got.updatePortPolicyMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	got = next.(model)
+	got.province = "广东省"
+	got.mode = viewPortPolicyProvince
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	got = next.(model)
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	next, _ = got.updatePortPolicyProvince(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	got = next.(model)
+	if len(store.cfg.Ingress.PortPolicies) != 2 {
+		t.Fatalf("policy count mismatch: %+v", store.cfg.Ingress.PortPolicies)
+	}
+	for _, policy := range store.cfg.Ingress.PortPolicies {
+		if policy.CNMode != "provinces" || len(policy.CNProvinces) != 1 || policy.CNProvinces[0] != "广东省" {
+			t.Fatalf("province policy mismatch: %+v", policy)
+		}
 	}
 }
 

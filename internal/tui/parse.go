@@ -23,6 +23,17 @@ func parsePortList(raw string) ([]int, error) {
 	return expandPortRangesForTUI(ranges), nil
 }
 
+func parsePortSelection(raw string) ([]int, error) {
+	ports, err := parsePortList(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("请输入端口，例如 443、443,8443 或 10000-10010")
+	}
+	return ports, nil
+}
+
 func parsePortRanges(raw string) ([]conf.PortRange, error) {
 	values := splitCSV(raw)
 	ranges := make([]conf.PortRange, 0, len(values))
@@ -300,6 +311,17 @@ func portListSummary(ports []int) string {
 	return fmt.Sprintf("%d 项", len(ports))
 }
 
+func portSelectionSummary(ports []int) string {
+	if len(ports) == 0 {
+		return "未设置"
+	}
+	ranges := compressPortsForTUI(ports)
+	if len(ranges) <= 3 {
+		return joinPortRanges(ranges)
+	}
+	return fmt.Sprintf("%d 个端口", len(ports))
+}
+
 func portRangesSummary(ranges []conf.PortRange) string {
 	if len(ranges) == 0 {
 		return "未设置"
@@ -308,6 +330,35 @@ func portRangesSummary(ranges []conf.PortRange) string {
 		return joinPortRanges(ranges)
 	}
 	return fmt.Sprintf("%d 项", len(ranges))
+}
+
+func compressPortsForTUI(ports []int) []conf.PortRange {
+	seen := map[int]struct{}{}
+	values := make([]int, 0, len(ports))
+	for _, port := range ports {
+		if _, ok := seen[port]; ok {
+			continue
+		}
+		seen[port] = struct{}{}
+		values = append(values, port)
+	}
+	sort.Ints(values)
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]conf.PortRange, 0, len(values))
+	start := values[0]
+	prev := values[0]
+	for _, port := range values[1:] {
+		if port == prev+1 {
+			prev = port
+			continue
+		}
+		out = append(out, conf.PortRange{Start: start, End: prev})
+		start = port
+		prev = port
+	}
+	return append(out, conf.PortRange{Start: start, End: prev})
 }
 
 func joinPortRanges(ranges []conf.PortRange) string {

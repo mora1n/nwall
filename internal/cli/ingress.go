@@ -160,88 +160,110 @@ func ingressCustom(cfg conf.Config, args []string) error {
 
 func ingressPort(cfg conf.Config, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("用法: nwall ingress port <port> status|clear|cn|city ...")
+		return fmt.Errorf("用法: nwall ingress port <port|ports> status|clear|cn|city ...")
 	}
-	port, err := parsePort(args[0])
+	ports, err := parsePortSelection(args[0])
 	if err != nil {
 		return err
 	}
 	switch args[1] {
 	case "status":
-		return printPortPolicyStatus(cfg, port)
+		return printPortPolicyStatuses(cfg, ports)
 	case "clear":
-		if !portPolicyExists(cfg.Ingress.PortPolicies, port) {
-			return fmt.Errorf("未找到端口覆盖策略: %d", port)
+		for _, port := range ports {
+			if !portPolicyExists(cfg.Ingress.PortPolicies, port) {
+				return fmt.Errorf("未找到端口覆盖策略: %d", port)
+			}
 		}
-		cfg.Ingress.PortPolicies = removePortPolicy(cfg.Ingress.PortPolicies, port)
-		return saveIngress(cfg, fmt.Sprintf("已清除端口 %d 覆盖策略", port))
+		cfg.Ingress.PortPolicies = removePortPolicies(cfg.Ingress.PortPolicies, ports)
+		return saveIngress(cfg, fmt.Sprintf("已清除 %d 个端口覆盖策略", len(ports)))
 	case "cn":
-		return ingressPortCN(cfg, port, args[2:])
+		return ingressPortCN(cfg, ports, args[2:])
 	case "city":
-		return ingressPortCity(cfg, port, args[2:])
+		return ingressPortCity(cfg, ports, args[2:])
 	default:
 		return fmt.Errorf("未知 port 子命令: %s", args[1])
 	}
 }
 
-func ingressPortCN(cfg conf.Config, port int, args []string) error {
+func ingressPortCN(cfg conf.Config, ports []int, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall ingress port <port> cn off|all|select <省份...>")
+		return fmt.Errorf("用法: nwall ingress port <port|ports> cn off|all|select <省份...>")
 	}
-	policy := portPolicyBase(cfg, port)
+	policies := clonePortPolicies(cfg.Ingress.PortPolicies)
 	switch args[0] {
 	case "off":
-		policy.CNMode = "off"
-		policy.CNProvinces = nil
+		for _, port := range ports {
+			policy := portPolicyBaseFrom(cfg, policies, port)
+			policy.CNMode = "off"
+			policy.CNProvinces = nil
+			policies = upsertPortPolicy(policies, policy)
+		}
 	case "all":
-		policy.CNMode = "all"
-		policy.CNProvinces = nil
+		for _, port := range ports {
+			policy := portPolicyBaseFrom(cfg, policies, port)
+			policy.CNMode = "all"
+			policy.CNProvinces = nil
+			policies = upsertPortPolicy(policies, policy)
+		}
 	case "select":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall ingress port <port> cn select <省份...>")
+			return fmt.Errorf("用法: nwall ingress port <port|ports> cn select <省份...>")
 		}
 		if err := validateProvinces(args[1:]); err != nil {
 			return err
 		}
-		policy.CNMode = "provinces"
-		policy.CNProvinces = append([]string(nil), args[1:]...)
+		for _, port := range ports {
+			policy := portPolicyBaseFrom(cfg, policies, port)
+			policy.CNMode = "provinces"
+			policy.CNProvinces = append([]string(nil), args[1:]...)
+			policies = upsertPortPolicy(policies, policy)
+		}
 	default:
 		return fmt.Errorf("未知 port cn 子命令: %s", args[0])
 	}
-	cfg.Ingress.PortPolicies = upsertPortPolicy(cfg.Ingress.PortPolicies, policy)
-	return saveIngress(cfg, fmt.Sprintf("已更新端口 %d CN 策略", port))
+	cfg.Ingress.PortPolicies = policies
+	return saveIngress(cfg, fmt.Sprintf("已更新 %d 个端口 CN 策略", len(ports)))
 }
 
-func ingressPortCity(cfg conf.Config, port int, args []string) error {
+func ingressPortCity(cfg conf.Config, ports []int, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: nwall ingress port <port> city list|add|del <code...>")
+		return fmt.Errorf("用法: nwall ingress port <port|ports> city list|add|del <code...>")
 	}
-	policy := portPolicyBase(cfg, port)
+	policies := clonePortPolicies(cfg.Ingress.PortPolicies)
 	switch args[0] {
 	case "list":
-		return printCityCodes(policy.CNCityCodes)
+		return printPortCityCodes(cfg, ports)
 	case "add":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall ingress port <port> city add <code...>")
+			return fmt.Errorf("用法: nwall ingress port <port|ports> city add <code...>")
 		}
 		if err := validateCityCodes(args[1:]); err != nil {
 			return err
 		}
-		policy.CNCityCodes = appendUnique(policy.CNCityCodes, args[1:]...)
+		for _, port := range ports {
+			policy := portPolicyBaseFrom(cfg, policies, port)
+			policy.CNCityCodes = appendUnique(policy.CNCityCodes, args[1:]...)
+			policies = upsertPortPolicy(policies, policy)
+		}
 	case "del":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: nwall ingress port <port> city del <code...>")
+			return fmt.Errorf("用法: nwall ingress port <port|ports> city del <code...>")
 		}
-		next, err := removeValues(policy.CNCityCodes, args[1:]...)
-		if err != nil {
-			return err
+		for _, port := range ports {
+			policy := portPolicyBaseFrom(cfg, policies, port)
+			next, err := removeValues(policy.CNCityCodes, args[1:]...)
+			if err != nil {
+				return err
+			}
+			policy.CNCityCodes = next
+			policies = upsertPortPolicy(policies, policy)
 		}
-		policy.CNCityCodes = next
 	default:
 		return fmt.Errorf("未知 port city 子命令: %s", args[0])
 	}
-	cfg.Ingress.PortPolicies = upsertPortPolicy(cfg.Ingress.PortPolicies, policy)
-	return saveIngress(cfg, fmt.Sprintf("已更新端口 %d 城市策略", port))
+	cfg.Ingress.PortPolicies = policies
+	return saveIngress(cfg, fmt.Sprintf("已更新 %d 个端口城市策略", len(ports)))
 }
 
 func saveIngress(cfg conf.Config, msg string) error {
@@ -258,6 +280,58 @@ func parsePort(raw string) (int, error) {
 		return 0, fmt.Errorf("无效端口: %s", raw)
 	}
 	return port, nil
+}
+
+func parsePortSelection(raw string) ([]int, error) {
+	fields := strings.FieldsFunc(strings.TrimSpace(raw), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	seen := map[int]struct{}{}
+	ports := make([]int, 0, len(fields))
+	for _, field := range fields {
+		if field == "" {
+			continue
+		}
+		start, end, err := parsePortSelectionItem(field)
+		if err != nil {
+			return nil, err
+		}
+		for port := start; port <= end; port++ {
+			if _, ok := seen[port]; ok {
+				continue
+			}
+			seen[port] = struct{}{}
+			ports = append(ports, port)
+		}
+	}
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("请输入端口，例如 443、443,8443 或 10000-10010")
+	}
+	sort.Ints(ports)
+	return ports, nil
+}
+
+func parsePortSelectionItem(raw string) (int, int, error) {
+	if strings.Count(raw, "-") == 0 {
+		port, err := parsePort(raw)
+		return port, port, err
+	}
+	parts := strings.Split(raw, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	start, err := parsePort(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	end, err := parsePort(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("无效端口范围: %s", raw)
+	}
+	return start, end, nil
 }
 
 func validateProvinces(names []string) error {
@@ -296,6 +370,34 @@ func printCityCodes(codes []string) error {
 	return nil
 }
 
+func printPortCityCodes(cfg conf.Config, ports []int) error {
+	if len(ports) == 1 {
+		return printCityCodes(portPolicyBase(cfg, ports[0]).CNCityCodes)
+	}
+	for i, port := range ports {
+		fmt.Printf("listen_port: %d\n", port)
+		if err := printCityCodes(portPolicyBase(cfg, port).CNCityCodes); err != nil {
+			return err
+		}
+		if i != len(ports)-1 {
+			fmt.Println()
+		}
+	}
+	return nil
+}
+
+func printPortPolicyStatuses(cfg conf.Config, ports []int) error {
+	for i, port := range ports {
+		if err := printPortPolicyStatus(cfg, port); err != nil {
+			return err
+		}
+		if i != len(ports)-1 {
+			fmt.Println()
+		}
+	}
+	return nil
+}
+
 func printPortPolicyStatus(cfg conf.Config, port int) error {
 	policy := portPolicyBase(cfg, port)
 	source := "全局默认"
@@ -308,7 +410,11 @@ func printPortPolicyStatus(cfg conf.Config, port int) error {
 }
 
 func portPolicyBase(cfg conf.Config, port int) conf.PortPolicy {
-	for _, policy := range cfg.Ingress.PortPolicies {
+	return portPolicyBaseFrom(cfg, cfg.Ingress.PortPolicies, port)
+}
+
+func portPolicyBaseFrom(cfg conf.Config, policies []conf.PortPolicy, port int) conf.PortPolicy {
+	for _, policy := range policies {
 		if policy.ListenPort == port {
 			return clonePortPolicy(policy)
 		}
@@ -328,6 +434,14 @@ func clonePortPolicy(policy conf.PortPolicy) conf.PortPolicy {
 		CNProvinces: append([]string(nil), policy.CNProvinces...),
 		CNCityCodes: append([]string(nil), policy.CNCityCodes...),
 	}
+}
+
+func clonePortPolicies(policies []conf.PortPolicy) []conf.PortPolicy {
+	out := make([]conf.PortPolicy, 0, len(policies))
+	for _, policy := range policies {
+		out = append(out, clonePortPolicy(policy))
+	}
+	return out
 }
 
 func portPolicyExists(policies []conf.PortPolicy, port int) bool {
@@ -350,6 +464,14 @@ func upsertPortPolicy(policies []conf.PortPolicy, policy conf.PortPolicy) []conf
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].ListenPort < out[j].ListenPort
 	})
+	return out
+}
+
+func removePortPolicies(policies []conf.PortPolicy, ports []int) []conf.PortPolicy {
+	out := clonePortPolicies(policies)
+	for _, port := range ports {
+		out = removePortPolicy(out, port)
+	}
 	return out
 }
 
