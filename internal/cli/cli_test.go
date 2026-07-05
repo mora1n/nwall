@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mora1n/nwall/internal/conf"
 	"github.com/mora1n/nwall/internal/geo"
@@ -432,6 +434,67 @@ func TestShouldSkipUpdate(t *testing.T) {
 				t.Fatalf("shouldSkipUpdate(%q, %q)=%v want %v", tt.current, tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWaitDaemonHealthRetriesUntilStatusSucceeds(t *testing.T) {
+	oldCommandCombinedOutput := commandCombinedOutput
+	oldSleep := sleepFunc
+	t.Cleanup(func() {
+		commandCombinedOutput = oldCommandCombinedOutput
+		sleepFunc = oldSleep
+	})
+	calls := 0
+	commandCombinedOutput = func(name string, args ...string) ([]byte, error) {
+		if name != "/tmp/nwall" {
+			t.Fatalf("unexpected command name: %s", name)
+		}
+		if !reflect.DeepEqual(args, []string{"status"}) {
+			t.Fatalf("unexpected command args: %+v", args)
+		}
+		calls++
+		if calls < 3 {
+			return []byte("连接 nwall daemon 失败"), errors.New("exit status 1")
+		}
+		return []byte("daemon_ok: true\n"), nil
+	}
+	sleeps := 0
+	sleepFunc = func(d time.Duration) {
+		if d != time.Millisecond {
+			t.Fatalf("unexpected sleep duration: %s", d)
+		}
+		sleeps++
+	}
+	if err := waitDaemonHealth("/tmp/nwall", time.Second, time.Millisecond); err != nil {
+		t.Fatalf("waitDaemonHealth should retry until success: %v", err)
+	}
+	if calls != 3 || sleeps != 2 {
+		t.Fatalf("retry counts mismatch: calls=%d sleeps=%d", calls, sleeps)
+	}
+}
+
+func TestWaitDaemonHealthTimeoutIncludesLastOutput(t *testing.T) {
+	oldCommandCombinedOutput := commandCombinedOutput
+	oldSleep := sleepFunc
+	t.Cleanup(func() {
+		commandCombinedOutput = oldCommandCombinedOutput
+		sleepFunc = oldSleep
+	})
+	commandCombinedOutput = func(name string, args ...string) ([]byte, error) {
+		return []byte("连接 nwall daemon 失败"), errors.New("exit status 1")
+	}
+	sleepFunc = func(d time.Duration) {
+		t.Fatalf("timeout=0 should not sleep, got %s", d)
+	}
+	err := waitDaemonHealth("/tmp/nwall", 0, time.Millisecond)
+	if err == nil {
+		t.Fatal("waitDaemonHealth should fail on timeout")
+	}
+	got := err.Error()
+	for _, want := range []string{"daemon health-check failed after 0s", "exit status 1", "连接 nwall daemon 失败"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error missing %q: %s", want, got)
+		}
 	}
 }
 

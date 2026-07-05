@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	defaultPrefix     = "/usr/local"
-	defaultStateDir   = "/var/lib/nwall"
-	defaultSystemdDir = "/etc/systemd/system"
-	defaultRepo       = "mora1n/nwall"
-	checksumsName     = "SHA256SUMS"
+	defaultPrefix            = "/usr/local"
+	defaultStateDir          = "/var/lib/nwall"
+	defaultSystemdDir        = "/etc/systemd/system"
+	defaultRepo              = "mora1n/nwall"
+	checksumsName            = "SHA256SUMS"
+	daemonHealthCheckTimeout = 30 * time.Second
+	daemonHealthCheckWait    = 500 * time.Millisecond
 )
 
 var managedUnits = []string{
@@ -44,6 +46,16 @@ var legacyUnits = []string{
 var restartableUnits = []string{
 	"nwall.service",
 }
+
+var (
+	commandRun = func(name string, args ...string) error {
+		return exec.Command(name, args...).Run()
+	}
+	commandCombinedOutput = func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).CombinedOutput()
+	}
+	sleepFunc = time.Sleep
+)
 
 func runUninstall(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
@@ -519,10 +531,10 @@ func restartUnits(units []string) error {
 
 func healthCheck(opts adminOptions, services []string) error {
 	bin := filepath.Join(opts.Prefix, "bin", "nwall")
-	if err := exec.Command(bin, "version").Run(); err != nil {
+	if err := commandRun(bin, "version"); err != nil {
 		return fmt.Errorf("version health-check failed: %w", err)
 	}
-	if err := exec.Command(bin, "protect", "status").Run(); err != nil {
+	if err := commandRun(bin, "protect", "status"); err != nil {
 		return fmt.Errorf("protect status health-check failed: %w", err)
 	}
 	for _, unit := range services {
@@ -530,12 +542,34 @@ func healthCheck(opts adminOptions, services []string) error {
 			return fmt.Errorf("unit health-check failed: %s is not active", unit)
 		}
 		if unit == "nwall.service" {
-			if err := exec.Command(bin, "status").Run(); err != nil {
-				return fmt.Errorf("daemon health-check failed: %w", err)
+			if err := waitDaemonHealth(bin, daemonHealthCheckTimeout, daemonHealthCheckWait); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+func waitDaemonHealth(bin string, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastOutput []byte
+	var lastErr error
+	for {
+		out, err := commandCombinedOutput(bin, "status")
+		if err == nil {
+			return nil
+		}
+		lastOutput = out
+		lastErr = err
+		if timeout <= 0 || !time.Now().Before(deadline) {
+			msg := strings.TrimSpace(string(lastOutput))
+			if msg == "" {
+				return fmt.Errorf("daemon health-check failed after %s: %w", timeout, lastErr)
+			}
+			return fmt.Errorf("daemon health-check failed after %s: %w: %s", timeout, lastErr, msg)
+		}
+		sleepFunc(interval)
+	}
 }
 
 func systemctl(dryRun bool, args ...string) error {
